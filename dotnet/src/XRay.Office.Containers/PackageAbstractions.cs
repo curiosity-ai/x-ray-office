@@ -53,3 +53,64 @@ public interface IPackagePart
     /// </summary>
     Stream Open();
 }
+
+/// <summary>Reads a part, or any stream, whole into one array of exactly its length.</summary>
+/// <remarks>
+/// <para>
+/// <c>CopyTo</c> a <see cref="MemoryStream"/> and <c>ToArray</c> doubles the buffer as it grows and then
+/// copies it once more, so a picture part of a few megabytes cost three or four times its size in
+/// allocation before anything had looked at it. Where the length is known in advance the bytes are read
+/// straight into an array of that size.
+/// </para>
+/// <para>
+/// A declared length is a statement the file makes about itself, so it is trusted only so far: the
+/// array is pre-sized up to <see cref="MaxPresizedBytes"/> and grown past that the ordinary way, and a
+/// stream that turns out longer or shorter than declared is still read correctly.
+/// </para>
+/// </remarks>
+public static class PartBytes
+{
+    /// <summary>The largest declared length allocated up front.</summary>
+    public const int MaxPresizedBytes = 64 * 1024 * 1024;
+
+    /// <summary>Reads the whole part.</summary>
+    public static byte[] ReadAll(this IPackagePart part)
+    {
+        ArgumentNullException.ThrowIfNull(part);
+
+        using Stream content = part.Open();
+        return ReadAll(content, part.Length);
+    }
+
+    /// <summary>Reads the rest of a stream, using <paramref name="expectedLength"/> when it is known.</summary>
+    /// <param name="content">The stream to read.</param>
+    /// <param name="expectedLength">The length the stream is expected to have, or -1 when not known.</param>
+    public static byte[] ReadAll(Stream content, long expectedLength = -1)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+
+        if (expectedLength < 0 && content.CanSeek) expectedLength = content.Length - content.Position;
+        if (expectedLength is < 0 or > MaxPresizedBytes) return ReadGrowing(content, []);
+
+        byte[] exact = new byte[expectedLength];
+        int read = 0;
+        while (read < exact.Length)
+        {
+            int got = content.Read(exact, read, exact.Length - read);
+            if (got == 0) return exact.AsSpan(0, read).ToArray();
+            read += got;
+        }
+
+        // The declared length was a floor rather than the length: carry on the ordinary way.
+        int next = content.ReadByte();
+        return next < 0 ? exact : ReadGrowing(content, [.. exact, (byte)next]);
+    }
+
+    private static byte[] ReadGrowing(Stream content, byte[] prefix)
+    {
+        using MemoryStream buffer = new();
+        buffer.Write(prefix);
+        content.CopyTo(buffer);
+        return buffer.ToArray();
+    }
+}

@@ -54,7 +54,7 @@ public sealed class WmfImageDecoder : IVectorImageDecoder
             return VectorImage.Empty with { Diagnostics = diagnostics };
         }
 
-        WmfReader reader = new(data.ToArray(), caps, diagnostics, _text);
+        WmfReader reader = new(Metafiles.MetafileBytes.Whole(data), caps, diagnostics, _text);
 
         // Decided once, before either representation is replayed: see WmfReader.ScanForEmbeddedEmf.
         try

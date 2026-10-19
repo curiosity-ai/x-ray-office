@@ -368,7 +368,7 @@ internal sealed class SkiaDrawingSink : IDrawingSink, IDisposable
         OpenTypeFace? face = null;
         try
         {
-            if (path.Length > 0 && File.Exists(path)) face = OpenTypeFace.ReadFile(path, index);
+            if (path.Length > 0 && File.Exists(path)) face = SharedFaces.Read(path, index);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -688,20 +688,16 @@ internal sealed class SkiaDrawingSink : IDrawingSink, IDisposable
         if (image.Pixels.Length < image.Width * image.Height * 4) return null;
 
         SKImageInfo info = new(image.Width, image.Height, SKColorType.Rgba8888, SKAlphaType.Unpremul);
-        byte[] pixels = image.Pixels.ToArray();
-        System.Runtime.InteropServices.GCHandle pin =
-            System.Runtime.InteropServices.GCHandle.Alloc(pixels, System.Runtime.InteropServices.GCHandleType.Pinned);
 
-        try
-        {
-            using SKData data = SKData.CreateCopy(pin.AddrOfPinnedObject(), (ulong)pixels.Length);
-            return SKImage.FromPixels(info, data, info.RowBytes);
-        }
-        finally
-        {
-            pin.Free();
-        }
+        // Skia copies the pixels into its own buffer, so the decoded ones are pinned where they are
+        // rather than first copied into a managed array of the same size.
+        using System.Buffers.MemoryHandle pin = image.Pixels.Pin();
+        using SKData data = CopyPixels(pin, image.Pixels.Length);
+        return SKImage.FromPixels(info, data, info.RowBytes);
     }
+
+    private static unsafe SKData CopyPixels(System.Buffers.MemoryHandle pin, int length)
+        => SKData.CreateCopy((IntPtr)pin.Pointer, (ulong)length);
 
     /// <summary>The document-space transform Skia states in device pixels.</summary>
     private SKMatrix Matrix(AffineTransform transform) => new(

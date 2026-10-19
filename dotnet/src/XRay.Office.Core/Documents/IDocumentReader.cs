@@ -93,8 +93,17 @@ public sealed class DocumentSource : IDisposable
     }
 
     /// <summary>Reads from an in-memory buffer.</summary>
+    /// <remarks>
+    /// The buffer is read where it is, not copied, so it must not change while the source is in use; a
+    /// document is often megabytes and the copy was one more of them per open.
+    /// </remarks>
     public static DocumentSource FromBytes(ReadOnlyMemory<byte> bytes, string? fileName = null)
-        => new(new MemoryStream(bytes.ToArray(), writable: false), ownsStream: true, fileName);
+        => new(
+            System.Runtime.InteropServices.MemoryMarshal.TryGetArray(bytes, out ArraySegment<byte> segment)
+                ? new MemoryStream(segment.Array!, segment.Offset, segment.Count, writable: false)
+                : new MemoryStream(bytes.ToArray(), writable: false),
+            ownsStream: true,
+            fileName);
 
     /// <summary>
     /// Reads from a stream, buffering it into memory first if it is not seekable.

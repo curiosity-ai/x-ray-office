@@ -27,7 +27,7 @@ public sealed class LayoutFonts
     /// <summary>Creates a cache over a resolver, or over the installed fonts.</summary>
     /// <param name="fonts">The resolver to use, or null to build one over the installed fonts.</param>
     public LayoutFonts(SystemFontResolver? fonts = null)
-        => _fonts = fonts ?? new SystemFontResolver(SystemFontIndex.Build());
+        => _fonts = fonts ?? SystemFontResolver.Build();
 
     /// <summary>
     /// The device grid this document's font metrics are rounded through, or null to scale them exactly.

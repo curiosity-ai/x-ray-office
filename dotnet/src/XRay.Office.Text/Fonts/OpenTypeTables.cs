@@ -114,6 +114,125 @@ public sealed class SfntFile
         return file._tables.Count > 0 ? file : null;
     }
 
+    /// <summary>
+    /// Reads a face's table directory and only the named tables out of a file on disk.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For a caller that wants a few small tables of many fonts, which is what indexing the installed
+    /// faces is: the family name, weight and slant live in <c>name</c>, <c>OS/2</c>, <c>head</c> and
+    /// <c>post</c>, a few kilobytes, where reading the whole file meant 138 MB for the fonts on this
+    /// machine, every one of them read in full for every document laid out.
+    /// </para>
+    /// <para>
+    /// The answer validates a table against the file's length exactly as <see cref="Open"/> does, and
+    /// is null in exactly the cases <see cref="Open"/> is null, whichever tables were asked for. But
+    /// <see cref="Bytes"/> is then only the tables that were read, packed together, and not a font a
+    /// shaper can open: an instance from here is for reading those tables and nothing else.
+    /// </para>
+    /// </remarks>
+    /// <param name="path">The font file.</param>
+    /// <param name="faceIndex">Which face of a collection to read; ignored for a single font.</param>
+    /// <param name="tags">The tables to read; any the face lacks are simply absent.</param>
+    /// <returns>The directory, or null when the file is not a font this reader understands.</returns>
+    public static SfntFile? OpenTables(string path, int faceIndex, params ReadOnlySpan<string> tags)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+
+        using Microsoft.Win32.SafeHandles.SafeFileHandle handle = File.OpenHandle(path);
+        long fileLength = RandomAccess.GetLength(handle);
+        if (fileLength < 12) return null;
+
+        Span<byte> header = stackalloc byte[16];
+        int headerLength = ReadAt(handle, header[..(int)Math.Min(16, fileLength)], 0);
+
+        int faceCount = 1;
+        long directoryAt = 0;
+
+        uint tag = BinaryPrimitives.ReadUInt32BigEndian(header);
+        if (tag == CollectionTag)
+        {
+            if (headerLength < 16) return null;
+
+            int count = (int)BinaryPrimitives.ReadUInt32BigEndian(header[8..]);
+            if (count <= 0 || 12 + (4L * count) > fileLength) return null;
+
+            faceCount = count;
+            if (faceIndex < 0 || faceIndex >= count) return null;
+
+            Span<byte> offset = stackalloc byte[4];
+            if (ReadAt(handle, offset, 12 + (4L * faceIndex)) < 4) return null;
+
+            directoryAt = BinaryPrimitives.ReadUInt32BigEndian(offset);
+            if (directoryAt + 12 > fileLength) return null;
+
+            if (ReadAt(handle, header[..12], directoryAt) < 12) return null;
+            tag = BinaryPrimitives.ReadUInt32BigEndian(header);
+        }
+
+        if (tag is not (OpenTypeTag or TrueTypeTag or AppleTrueTypeTag)) return null;
+
+        int numTables = BinaryPrimitives.ReadUInt16BigEndian(header[4..]);
+        long entriesAt = directoryAt + 12;
+        if (numTables <= 0 || entriesAt + (16L * numTables) > fileLength) return null;
+
+        byte[] entries = new byte[16 * numTables];
+        if (ReadAt(handle, entries, entriesAt) < entries.Length) return null;
+
+        uint[] wanted = new uint[tags.Length];
+        for (int i = 0; i < tags.Length; i++) wanted[i] = TagOf(tags[i]);
+
+        bool anyValid = false;
+        Dictionary<uint, (long Offset, int Length)> selected = [];
+
+        for (int i = 0; i < numTables; i++)
+        {
+            ReadOnlySpan<byte> entry = entries.AsSpan(16 * i, 16);
+            uint tableTag = BinaryPrimitives.ReadUInt32BigEndian(entry);
+            long offset = BinaryPrimitives.ReadUInt32BigEndian(entry[8..]);
+            long length = BinaryPrimitives.ReadUInt32BigEndian(entry[12..]);
+
+            // The same skip as `Open`: a damaged table is left out, the rest of the face is not.
+            if (offset + length > fileLength) continue;
+
+            anyValid = true;
+
+            // A later entry for the same tag replaces an earlier one, as it does in `Open`.
+            if (Array.IndexOf(wanted, tableTag) >= 0) selected[tableTag] = (offset, (int)length);
+        }
+
+        if (!anyValid) return null;
+
+        long total = 0;
+        foreach ((long _, int length) in selected.Values) total += length;
+
+        byte[] data = new byte[total];
+        SfntFile file = new(data) { FaceIndex = faceIndex, FaceCount = faceCount };
+
+        int at = 0;
+        foreach ((uint tableTag, (long offset, int length)) in selected)
+        {
+            int read = ReadAt(handle, data.AsSpan(at, length), offset);
+            file._tables[tableTag] = (at, read);
+            at += length;
+        }
+
+        return file;
+    }
+
+    private static int ReadAt(Microsoft.Win32.SafeHandles.SafeFileHandle handle, Span<byte> buffer, long offset)
+    {
+        int total = 0;
+        while (total < buffer.Length)
+        {
+            int read = RandomAccess.Read(handle, buffer[total..], offset + total);
+            if (read == 0) break;
+            total += read;
+        }
+
+        return total;
+    }
+
     /// <summary>A table's bytes, or empty when the face has no such table.</summary>
     public ReadOnlySpan<byte> Table(string tag)
     {

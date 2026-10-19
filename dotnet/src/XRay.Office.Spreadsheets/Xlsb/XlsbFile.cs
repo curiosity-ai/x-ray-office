@@ -221,9 +221,7 @@ internal sealed class XlsbFile : IDisposable
         using Stream? content = OpenRelated(relationshipSuffix, conventionalName);
         if (content is null) return null;
 
-        using MemoryStream buffer = new();
-        content.CopyTo(buffer);
-        return buffer.ToArray();
+        return PartBytes.ReadAll(content);
     }
 
     private Stream? OpenRelated(string relationshipSuffix, string conventionalName)

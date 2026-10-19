@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Xml.Linq;
+using XRay.Office.Containers;
 using XRay.Office.Core.Charts;
 using XRay.Office.Core.Geometry;
 using XRay.Office.Core.Graphics;
@@ -571,9 +572,8 @@ internal static class OdsDrawings
             using Stream? content = file.OpenPart(part);
             if (content is null) return default;
 
-            using MemoryStream buffer = new();
-            content.CopyTo(buffer);
-            return buffer.Length == 0 ? default : Drawable(buffer.ToArray(), mediaType);
+            byte[] bytes = PartBytes.ReadAll(content);
+            return bytes.Length == 0 ? default : Drawable(bytes, mediaType);
         }
 
         XElement? data = image.Element(XName.Get("binary-data", OdfNamespaces.Office));

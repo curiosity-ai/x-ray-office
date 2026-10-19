@@ -504,13 +504,8 @@ internal static class XlsxDrawings
         if (relationship.IsExternal) return default;
         if (package.GetPart(relationship.Target) is not { } part) return default;
 
-        using Stream content = part.Open();
-        using MemoryStream buffer = new();
-        content.CopyTo(buffer);
-
-        if (buffer.Length == 0) return default;
-
-        ReadOnlyMemory<byte> bytes = buffer.ToArray();
+        ReadOnlyMemory<byte> bytes = part.ReadAll();
+        if (bytes.Length == 0) return default;
 
         return VectorImages.For(bytes.Span) is not null
             ? (null, new Lazy<VectorImage>(() => VectorImages.Decode(bytes)))
