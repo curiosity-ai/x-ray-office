@@ -371,7 +371,7 @@ public static class RasterImageDecoder
     /// </summary>
     private static RasterImage? DecodeReduced(ReadOnlySpan<byte> encoded, long maxPixels, string? mediaType)
     {
-        using SKData data = SKData.CreateCopy(encoded.ToArray());
+        using SKData data = SKData.CreateCopy(encoded);
         using SKCodec? codec = SKCodec.Create(data);
         if (codec is null) return null;
 
@@ -414,7 +414,7 @@ public static class RasterImageDecoder
     {
         // Copied into SKData rather than wrapped, because an SKImage decoded lazily would read the
         // span after this call has returned.
-        using SKData data = SKData.CreateCopy(encoded.ToArray());
+        using SKData data = SKData.CreateCopy(encoded);
         return SKImage.FromEncodedData(data);
     }
 }

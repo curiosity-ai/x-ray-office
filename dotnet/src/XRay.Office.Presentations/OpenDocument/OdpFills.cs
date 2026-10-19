@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Xml.Linq;
+using XRay.Office.Containers;
 using XRay.Office.Core.Graphics;
 using XRay.Office.Core.Units;
 using XRay.Office.OpenDocument;
@@ -173,12 +174,11 @@ internal sealed class OdpFills
         using Stream? content = _file.OpenPart(part);
         if (content is null) return null;
 
-        using MemoryStream buffer = new();
-        content.CopyTo(buffer);
+        byte[] read = PartBytes.ReadAll(content);
 
-        return buffer.Length == 0
+        return read.Length == 0
             ? null
-            : (buffer.ToArray(), _file.Package?.GetPart(part)?.MediaType, false);
+            : (read, _file.Package?.GetPart(part)?.MediaType, false);
     }
 
     /// <summary>

@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using XRay.Office.Core.Diagnostics;
 using XRay.Office.Core.Graphics;
 
@@ -712,7 +711,7 @@ public sealed class SystemFontResolver : IFontResolver, IGlyphFallbackResolver
         OpenTypeFace? face;
         try
         {
-            face = path.Length > 0 ? ReadShared(path, index) : null;
+            face = path.Length > 0 ? SharedFaces.Read(path, index) : null;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -998,7 +997,7 @@ public sealed class SystemFontResolver : IFontResolver, IGlyphFallbackResolver
         if (!_loaded.TryGetValue(reference.FaceKey, out OpenTypeFace? face))
         {
             (string path, int index) = SplitKey(reference.FaceKey);
-            face = path.Length > 0 ? ReadShared(path, index) : null;
+            face = path.Length > 0 ? SharedFaces.Read(path, index) : null;
 
             if (face is null)
             {
@@ -1030,48 +1029,6 @@ public sealed class SystemFontResolver : IFontResolver, IGlyphFallbackResolver
     {
         ArgumentNullException.ThrowIfNull(reference);
         return ((ResolvedFontFace)LoadFace(reference)).OpenType;
-    }
-
-    /// <summary>
-    /// Faces already read from disk, by file and face index, shared by every resolver in the process.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// A resolver is built per document, and its own cache is empty when it starts, so every document
-    /// used to read and parse its body face, its fallback faces and every candidate a glyph-fallback
-    /// search tried — a whole file each, and a CJK collection can be tens of megabytes. An
-    /// <see cref="OpenTypeFace"/> is immutable once read, so one instance can serve them all.
-    /// </para>
-    /// <para>
-    /// Held weakly: a face stays shared while some document still holds it, and a process that has
-    /// stopped rendering does not keep every face it ever tried in memory. A face whose file has
-    /// changed size or modification time since it was read is read again.
-    /// </para>
-    /// </remarks>
-    private static readonly ConcurrentDictionary<(string Path, int Index), SharedFace> SharedFaces = new();
-
-    private sealed record SharedFace(long Length, DateTime Modified, WeakReference<OpenTypeFace> Face);
-
-    private static OpenTypeFace? ReadShared(string path, int index)
-    {
-        FileInfo info = new(path);
-        if (!info.Exists) throw new FileNotFoundException("The font file does not exist.", path);
-
-        long length = info.Length;
-        DateTime modified = info.LastWriteTimeUtc;
-
-        if (SharedFaces.TryGetValue((path, index), out SharedFace? shared)
-            && shared.Length == length
-            && shared.Modified == modified
-            && shared.Face.TryGetTarget(out OpenTypeFace? cached))
-        {
-            return cached;
-        }
-
-        OpenTypeFace? face = OpenTypeFace.ReadFile(path, index);
-        if (face is not null) SharedFaces[(path, index)] = new SharedFace(length, modified, new(face));
-
-        return face;
     }
 
     private static (string Path, int Index) SplitKey(string faceKey)

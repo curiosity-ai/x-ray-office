@@ -1,4 +1,5 @@
 using System.Xml.Linq;
+using XRay.Office.Containers;
 using XRay.Office.Core.Charts;
 using XRay.Office.Core.Diagnostics;
 using XRay.Office.Core.Graphics;
@@ -149,10 +150,7 @@ public sealed class OdfPictures
             return FramePicture.None;
         }
 
-        using MemoryStream buffer = new();
-        part.CopyTo(buffer);
-
-        return EmbeddedPicture.Read(buffer.ToArray(), mediaType, entry, _diagnostics);
+        return EmbeddedPicture.Read(PartBytes.ReadAll(part), mediaType, entry, _diagnostics);
     }
 
     /// <summary>

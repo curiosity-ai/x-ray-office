@@ -434,13 +434,9 @@ public sealed class DocxPictures
             return FramePicture.None;
         }
 
-        using Stream content = part.Open();
-        using MemoryStream buffer = new();
-        content.CopyTo(buffer);
-
         // The part's declared content type is passed on as a hint and nothing more. OPC requires one
         // and producers still get it wrong; the bytes decide.
-        return EmbeddedPicture.Read(buffer.ToArray(), part.MediaType, partName, _diagnostics);
+        return EmbeddedPicture.Read(part.ReadAll(), part.MediaType, partName, _diagnostics);
     }
 }
 

@@ -71,4 +71,23 @@ public class SystemFontIndexTests
         b.ShouldBeSameAs(a);
         second.ReferenceFor(b).ShouldNotBeNull().FaceKey.ShouldBe(reference.FaceKey);
     }
+
+    [Fact]
+    public void ASharedFaceOutlivesACollectionBetweenDocuments()
+    {
+        InstalledFace? installed = SystemFontIndex.Shared.Faces.FirstOrDefault();
+        if (installed is null) Assert.Skip("No face is installed.");
+
+        WeakReference<OpenTypeFace> first = ReadAndForget(installed.Value);
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        first.TryGetTarget(out OpenTypeFace? kept).ShouldBeTrue();
+        SharedFaces.Read(installed.Value.Path, installed.Value.FaceIndex).ShouldBeSameAs(kept);
+    }
+
+    private static WeakReference<OpenTypeFace> ReadAndForget(InstalledFace installed)
+        => new(SharedFaces.Read(installed.Path, installed.FaceIndex).ShouldNotBeNull());
 }

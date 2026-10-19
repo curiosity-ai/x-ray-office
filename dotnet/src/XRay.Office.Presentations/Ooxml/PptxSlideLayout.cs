@@ -1763,13 +1763,10 @@ internal sealed partial class PptxSlideLayout
         PptxPicture picture = default;
         if (_file.Package.GetPart(relationship.Target) is { } part)
         {
-            using Stream content = part.Open();
-            using MemoryStream buffer = new();
-            content.CopyTo(buffer);
+            ReadOnlyMemory<byte> bytes = part.ReadAll();
 
-            if (buffer.Length > 0)
+            if (bytes.Length > 0)
             {
-                ReadOnlyMemory<byte> bytes = buffer.ToArray();
 
                 picture = VectorImages.For(bytes.Span) is not null
                     ? new PptxPicture(null, new Lazy<VectorImage>(() => VectorImages.Decode(bytes)))

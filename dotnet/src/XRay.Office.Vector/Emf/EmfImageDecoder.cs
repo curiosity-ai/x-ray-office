@@ -51,7 +51,7 @@ public sealed class EmfImageDecoder : IVectorImageDecoder
             return VectorImage.Empty with { Diagnostics = diagnostics };
         }
 
-        EmfReader reader = new(data.ToArray(), caps, diagnostics, _text);
+        EmfReader reader = new(Metafiles.MetafileBytes.Whole(data), caps, diagnostics, _text);
 
         try
         {
