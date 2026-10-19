@@ -145,7 +145,7 @@ public sealed partial class DocxLayoutSource
         Pictures = pictures;
         _theme = theme;
         _shapeStyles = shapeStyles;
-        _fonts = fonts ?? new SystemFontResolver(SystemFontIndex.Build());
+        _fonts = fonts ?? SystemFontResolver.Build();
         _defaultTabInterval = TabInterval(settings);
         _compatibilityMode = CompatibilityMode(settings);
         WordCompatibility compatibility = WordCompatibility.Read(settings);

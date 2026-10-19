@@ -266,9 +266,7 @@ public sealed class OpenTypeFace
     public int UnitsPerEm => Head.UnitsPerEm;
 
     /// <summary>The family name the face calls itself.</summary>
-    public string? FamilyName =>
-        NameTable.Read(File, NameTable.TypographicFamilyId)
-        ?? NameTable.Read(File, NameTable.FamilyId);
+    public string? FamilyName => FamilyNameOf(File);
 
     /// <summary>The subfamily, such as "Bold Italic".</summary>
     public string? SubfamilyName =>
@@ -295,13 +293,31 @@ public sealed class OpenTypeFace
     /// <summary>
     /// The weight on the OpenType 1-1000 scale, from <c>OS/2</c> or from the header's bold bit.
     /// </summary>
-    public int Weight => Os2?.Weight is > 0 and <= 1000 ? Os2.Value.Weight : Head.IsBold ? 700 : 400;
+    public int Weight => WeightOf(Os2, Head);
 
     /// <summary>True when the face is italic or oblique.</summary>
-    public bool IsItalic => Os2?.IsItalic ?? Head.IsItalic || Post.ItalicAngle != 0;
+    public bool IsItalic => IsItalicOf(Os2, Head, Post);
 
     /// <summary>True when every glyph has the same advance width.</summary>
     public bool IsFixedPitch => Post.IsFixedPitch;
+
+    /// <summary>The family name a table directory reports: the typographic family, else the family.</summary>
+    /// <remarks>
+    /// Static, with <see cref="WeightOf"/> and <see cref="IsItalicOf"/>, so that indexing the installed
+    /// faces can answer the same three questions from a directory holding only the tables they read,
+    /// without reading the face whole — and cannot drift from what the face itself answers.
+    /// </remarks>
+    internal static string? FamilyNameOf(SfntFile file)
+        => NameTable.Read(file, NameTable.TypographicFamilyId)
+           ?? NameTable.Read(file, NameTable.FamilyId);
+
+    /// <summary>The weight on the OpenType 1-1000 scale, from <c>OS/2</c> or from the header's bold bit.</summary>
+    internal static int WeightOf(Os2Table? os2, HeadTable head)
+        => os2?.Weight is > 0 and <= 1000 ? os2.Value.Weight : head.IsBold ? 700 : 400;
+
+    /// <summary>True when the tables say italic or oblique.</summary>
+    internal static bool IsItalicOf(Os2Table? os2, HeadTable head, PostTable post)
+        => os2?.IsItalic ?? head.IsItalic || post.ItalicAngle != 0;
 
     /// <summary>Reads a face, or null when the bytes are not a font this reader understands.</summary>
     /// <param name="data">The whole font file.</param>

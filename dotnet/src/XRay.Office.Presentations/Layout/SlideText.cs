@@ -726,7 +726,7 @@ public sealed class SlideFonts
     /// <summary>Creates a cache over a resolver, or over the installed fonts.</summary>
     /// <param name="fonts">The resolver to use, or null to build one over the installed fonts.</param>
     public SlideFonts(SystemFontResolver? fonts = null)
-        => _fonts = fonts ?? new SystemFontResolver(SystemFontIndex.Build());
+        => _fonts = fonts ?? SystemFontResolver.Build();
 
     /// <summary>
     /// The pitch the deck declares for a typeface, when its format states one.

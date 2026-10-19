@@ -1,5 +1,8 @@
 using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Globalization;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using XRay.Office.Core.Graphics;
 using XRay.Office.Text.Fonts;
@@ -184,14 +187,38 @@ internal sealed class PdfFontCatalogue(IPdfFontProvider provider, bool embed, Pd
         if (_faces.TryGetValue(key, out Face? existing)) return existing;
 
         PdfFontProgram? program = embed ? provider.Load(font) : null;
-        OpenTypeFace? opentype = program is { } bytes
-            ? OpenTypeFace.Read(bytes.Data.ToArray(), bytes.FaceIndex)
-            : null;
+        OpenTypeFace? opentype = program is { } bytes ? Parse(bytes) : null;
 
         Face face = new(font, program, opentype);
         face.Current = NewSubset(face);
         _faces[key] = face;
         return face;
+    }
+
+    /// <summary>
+    /// Faces parsed out of a provider's programs, by the program's own array and face index.
+    /// </summary>
+    /// <remarks>
+    /// A catalogue lives for one document and <see cref="FileFontProvider"/> for the process, so
+    /// every document used to copy each file it embedded and parse its <c>cmap</c> again — two
+    /// copies of a font the provider had already read. A program's bytes are the font file and are
+    /// not changed after they are handed over, so the parse can be shared; keyed weakly, so a
+    /// provider that lets a program go lets its face go with it.
+    /// </remarks>
+    private static readonly ConditionalWeakTable<byte[], ConcurrentDictionary<int, OpenTypeFace?>> ParsedFaces = new();
+
+    private static OpenTypeFace? Parse(PdfFontProgram program)
+    {
+        if (!MemoryMarshal.TryGetArray(program.Data, out ArraySegment<byte> segment)
+            || segment.Array is not { } array
+            || segment.Offset != 0
+            || segment.Count != array.Length)
+        {
+            return OpenTypeFace.Read(program.Data.ToArray(), program.FaceIndex);
+        }
+
+        return ParsedFaces.GetValue(array, static _ => new())
+                          .GetOrAdd(program.FaceIndex, index => OpenTypeFace.Read(array, index));
     }
 
     private Subset NewSubset(Face face)
@@ -528,10 +555,14 @@ internal sealed class PdfFontCatalogue(IPdfFontProvider provider, bool embed, Pd
     private static (int XMin, int YMin, int XMax, int YMax) BoundingBox(Face face)
     {
         if (face.Program is not { } program) return (-500, -300, 1500, 1000);
-        if (SfntTables.Read(program.Data.Span, program.FaceIndex)?.Table("head") is not { Length: >= 44 } head)
-        {
-            return (-500, -300, 1500, 1000);
-        }
+
+        // The parsed face holds the same program's table directory; reading it from there spares
+        // copying every table of the file to look at one of them.
+        byte[]? head = face.OpenType is { } opentype
+            ? opentype.File.Table("head").ToArray()
+            : SfntTables.Read(program.Data.Span, program.FaceIndex)?.Table("head");
+
+        if (head is not { Length: >= 44 }) return (-500, -300, 1500, 1000);
 
         int upem = BinaryPrimitives.ReadUInt16BigEndian(head.AsSpan(18));
         double scale = 1000.0 / (upem > 0 ? upem : 1000);

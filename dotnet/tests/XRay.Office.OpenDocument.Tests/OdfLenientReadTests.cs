@@ -247,4 +247,45 @@ public class OdfLenientReadTests
         table.ColumnCount.ShouldBe(1);
         table.GetText().ShouldBe("one\n");
     }
+
+    [Fact]
+    public void EmptyCellsBeforeContentKeepTheirColumnsAndTrailingOnesAreDropped()
+    {
+        // The empty runs are read lazily, so this pins what laziness must not change: an empty run
+        // between two values is still in the row, each copy at its own column, and a run after the
+        // last value is not.
+        string content = $"""
+            <office:document-content xmlns:office="{OdfNamespaces.Office}"
+                                     xmlns:table="{OdfNamespaces.Table}"
+                                     xmlns:text="{OdfNamespaces.Text}">
+              <office:body><office:spreadsheet>
+                <table:table table:name="Gaps">
+                  <table:table-row>
+                    <table:table-cell office:value-type="string"><text:p>a</text:p></table:table-cell>
+                    <table:table-cell table:number-columns-repeated="3"/>
+                    <table:table-cell table:number-columns-repeated="2"><text:p/></table:table-cell>
+                    <table:table-cell office:value-type="float" office:value="7"><text:p>7</text:p></table:table-cell>
+                    <table:table-cell table:number-columns-repeated="16000"/>
+                  </table:table-row>
+                </table:table>
+              </office:spreadsheet></office:body>
+            </office:document-content>
+            """;
+        using MemoryStream package = BuildPackage(new() { ["content.xml"] = content });
+        using OdfFile file = OdfFile.Open(package);
+
+        List<Diagnostic> diagnostics = [];
+        OdfContentReader reader = new(file, diagnostics);
+        Core.Extraction.ContentTable table = reader.ReadTableElement(
+            file.Body!.Elements().First());
+
+        var cells = table.Children.Cast<Core.Extraction.ContentTableRow>().Single()
+                         .Children.Cast<Core.Extraction.ContentTableCell>().ToList();
+
+        cells.Select(c => c.Column).ShouldBe([0, 1, 2, 3, 4, 5, 6]);
+        cells.Select(c => c.Row).Distinct().ShouldBe([0]);
+        cells.Distinct().Count().ShouldBe(7);
+        table.ColumnCount.ShouldBe(7);
+        cells[6].GetText().ShouldBe("7");
+    }
 }

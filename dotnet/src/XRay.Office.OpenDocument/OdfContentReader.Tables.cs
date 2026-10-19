@@ -232,6 +232,13 @@ public sealed partial class OdfContentReader
             int column = 0;
             int lastWithContent = -1;
 
+            // Empty childless cells not yet added, in order: a sheet's row commonly ends in one
+            // element repeated to the sheet's full width, and reading every copy only for the
+            // trailing-empty trim to discard them cost more than the rest of the read put together.
+            // They are materialised, each copy read for itself as before, only once a cell with
+            // content proves they were inside the row.
+            List<(XElement Element, int Column, int Count, ContentTableCell First)> pending = [];
+
             foreach (XElement child in rowElement.Elements())
             {
                 if (!OdfNamespaces.IsTable(child.Name.NamespaceName)) continue;
@@ -258,10 +265,33 @@ public sealed partial class OdfContentReader
                     continue;
                 }
 
+                ContentTableCell first = reader.ReadCell(child, rowIndex, column);
+
+                // Only a cell with no child elements is deferred: nothing inside it can be read,
+                // so its copies are identical and reading them later is reading them now.
+                if (IsEmpty(first) && !child.HasElements)
+                {
+                    pending.Add((child, column, repeat, first));
+                    column += repeat;
+                    continue;
+                }
+
                 for (int copy = 0; copy < repeat; copy++)
                 {
-                    ContentTableCell cell = reader.ReadCell(child, rowIndex, column);
-                    if (!IsEmpty(cell)) lastWithContent = cells.Count;
+                    ContentTableCell cell = copy == 0 ? first : reader.ReadCell(child, rowIndex, column);
+                    if (!IsEmpty(cell))
+                    {
+                        AddPending(cells, pending, rowIndex);
+                        lastWithContent = cells.Count;
+                    }
+                    else if (pending.Count > 0)
+                    {
+                        // An empty cell with children keeps its place behind the deferred ones.
+                        pending.Add((child, column, 1, cell));
+                        column++;
+                        continue;
+                    }
+
                     cells.Add(cell);
                     column++;
                 }
@@ -271,6 +301,20 @@ public sealed partial class OdfContentReader
             // whether or not the cells hold anything.
             if (lastWithContent + 1 < cells.Count) cells.RemoveRange(lastWithContent + 1, cells.Count - lastWithContent - 1);
             return cells;
+        }
+
+        private void AddPending(
+            List<ContentTableCell> cells,
+            List<(XElement Element, int Column, int Count, ContentTableCell First)> pending,
+            int rowIndex)
+        {
+            foreach ((XElement element, int column, int count, ContentTableCell first) in pending)
+            {
+                cells.Add(first);
+                for (int copy = 1; copy < count; copy++) cells.Add(reader.ReadCell(element, rowIndex, column + copy));
+            }
+
+            pending.Clear();
         }
 
         private static bool IsEmpty(ContentTableCell cell)

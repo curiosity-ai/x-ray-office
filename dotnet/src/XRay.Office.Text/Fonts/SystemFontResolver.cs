@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using XRay.Office.Core.Diagnostics;
 using XRay.Office.Core.Graphics;
 
@@ -102,8 +103,34 @@ public sealed class SystemFontIndex
         return directories;
     }
 
+    /// <summary>
+    /// The faces in <see cref="DefaultDirectories"/>, scanned once per process and shared.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Every layout used to scan the directories for itself, and that scan was most of what laying out
+    /// a short document cost: on a machine with 132 font files it read over 130 MB and parsed every
+    /// <c>cmap</c>, which was 37% of the CPU and over 80% of the bytes allocated while rendering the
+    /// word-processing fixtures to PDF. The index is read-only once built, so one instance serves every
+    /// resolver and every thread; what a resolver records about the document it serves lives on the
+    /// resolver.
+    /// </para>
+    /// <para>
+    /// The price is that a font installed while the process runs is not seen until it restarts. A
+    /// caller that installs fonts at run time, or wants a directory list of its own, calls
+    /// <see cref="Build"/> and hands the result to a <see cref="SystemFontResolver"/>.
+    /// </para>
+    /// </remarks>
+    public static SystemFontIndex Shared => SharedIndex.Value;
+
+    private static readonly Lazy<SystemFontIndex> SharedIndex =
+        new(() => Build(), LazyThreadSafetyMode.ExecutionAndPublication);
+
     /// <summary>The extensions a font file may have.</summary>
     private static readonly string[] Extensions = [".ttf", ".otf", ".ttc", ".otc"];
+
+    /// <summary>The tables a face's family name, weight, slant and pitch are read from.</summary>
+    private static readonly string[] IndexTables = ["head", "OS/2", "post", "name"];
 
     private readonly Dictionary<string, List<InstalledFace>> _families =
         new(StringComparer.Ordinal);
@@ -190,10 +217,10 @@ public sealed class SystemFontIndex
 
     private void Add(string path)
     {
-        OpenTypeFace? first;
+        SfntFile? first;
         try
         {
-            first = OpenTypeFace.ReadFile(path);
+            first = SfntFile.OpenTables(path, 0, IndexTables);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -210,14 +237,21 @@ public sealed class SystemFontIndex
             return;
         }
 
-        int faces = first.File.FaceCount;
+        int faces = first.FaceCount;
         for (int index = 0; index < faces; index++)
         {
-            OpenTypeFace? face = index == 0 ? first : SafeRead(path, index);
-            if (face?.FamilyName is not { Length: > 0 } family) continue;
+            SfntFile? file = index == 0 ? first : SafeOpen(path, index);
+            if (file is null || OpenTypeFace.FamilyNameOf(file) is not { Length: > 0 } family) continue;
+
+            HeadTable head = HeadTable.Read(file);
+            Os2Table? os2 = Os2Table.Read(file);
+            PostTable post = PostTable.Read(file);
 
             InstalledFace installed = new(
-                path, index, family, face.Weight, face.IsItalic, face.IsFixedPitch);
+                path, index, family,
+                OpenTypeFace.WeightOf(os2, head),
+                OpenTypeFace.IsItalicOf(os2, head, post),
+                post.IsFixedPitch);
 
             if (!_families.TryGetValue(installed.NormalisedFamily, out List<InstalledFace>? list))
             {
@@ -232,11 +266,11 @@ public sealed class SystemFontIndex
         }
     }
 
-    private static OpenTypeFace? SafeRead(string path, int faceIndex)
+    private static SfntFile? SafeOpen(string path, int faceIndex)
     {
         try
         {
-            return OpenTypeFace.ReadFile(path, faceIndex);
+            return SfntFile.OpenTables(path, faceIndex, IndexTables);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -289,7 +323,7 @@ public sealed class SystemFontResolver : IFontResolver, IGlyphFallbackResolver
     }
 
     /// <summary>Creates a resolver over the platform's font directories.</summary>
-    public static SystemFontResolver Build() => new(SystemFontIndex.Build());
+    public static SystemFontResolver Build() => new(SystemFontIndex.Shared);
 
     /// <summary>The index this resolver searches.</summary>
     public SystemFontIndex Index => _index;
@@ -678,7 +712,7 @@ public sealed class SystemFontResolver : IFontResolver, IGlyphFallbackResolver
         OpenTypeFace? face;
         try
         {
-            face = path.Length > 0 ? OpenTypeFace.ReadFile(path, index) : null;
+            face = path.Length > 0 ? ReadShared(path, index) : null;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -964,7 +998,7 @@ public sealed class SystemFontResolver : IFontResolver, IGlyphFallbackResolver
         if (!_loaded.TryGetValue(reference.FaceKey, out OpenTypeFace? face))
         {
             (string path, int index) = SplitKey(reference.FaceKey);
-            face = path.Length > 0 ? OpenTypeFace.ReadFile(path, index) : null;
+            face = path.Length > 0 ? ReadShared(path, index) : null;
 
             if (face is null)
             {
@@ -996,6 +1030,48 @@ public sealed class SystemFontResolver : IFontResolver, IGlyphFallbackResolver
     {
         ArgumentNullException.ThrowIfNull(reference);
         return ((ResolvedFontFace)LoadFace(reference)).OpenType;
+    }
+
+    /// <summary>
+    /// Faces already read from disk, by file and face index, shared by every resolver in the process.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A resolver is built per document, and its own cache is empty when it starts, so every document
+    /// used to read and parse its body face, its fallback faces and every candidate a glyph-fallback
+    /// search tried — a whole file each, and a CJK collection can be tens of megabytes. An
+    /// <see cref="OpenTypeFace"/> is immutable once read, so one instance can serve them all.
+    /// </para>
+    /// <para>
+    /// Held weakly: a face stays shared while some document still holds it, and a process that has
+    /// stopped rendering does not keep every face it ever tried in memory. A face whose file has
+    /// changed size or modification time since it was read is read again.
+    /// </para>
+    /// </remarks>
+    private static readonly ConcurrentDictionary<(string Path, int Index), SharedFace> SharedFaces = new();
+
+    private sealed record SharedFace(long Length, DateTime Modified, WeakReference<OpenTypeFace> Face);
+
+    private static OpenTypeFace? ReadShared(string path, int index)
+    {
+        FileInfo info = new(path);
+        if (!info.Exists) throw new FileNotFoundException("The font file does not exist.", path);
+
+        long length = info.Length;
+        DateTime modified = info.LastWriteTimeUtc;
+
+        if (SharedFaces.TryGetValue((path, index), out SharedFace? shared)
+            && shared.Length == length
+            && shared.Modified == modified
+            && shared.Face.TryGetTarget(out OpenTypeFace? cached))
+        {
+            return cached;
+        }
+
+        OpenTypeFace? face = OpenTypeFace.ReadFile(path, index);
+        if (face is not null) SharedFaces[(path, index)] = new SharedFace(length, modified, new(face));
+
+        return face;
     }
 
     private static (string Path, int Index) SplitKey(string faceKey)

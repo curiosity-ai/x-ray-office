@@ -124,7 +124,7 @@ public sealed partial class OdtLayoutSource
         _sectionMargins = sectionMargins ?? [];
         _sectionCount = sectionCount;
         _pictures = pictures;
-        _fonts = fonts ?? new SystemFontResolver(SystemFontIndex.Build());
+        _fonts = fonts ?? SystemFontResolver.Build();
         _masterPages = masterPages ?? new Dictionary<string, int>(StringComparer.Ordinal);
         _footnotes = NumberingIn(stylesRoot, "footnote", NoteNumbering.Footnotes);
         _endnotes = NumberingIn(stylesRoot, "endnote", NoteNumbering.Endnotes);

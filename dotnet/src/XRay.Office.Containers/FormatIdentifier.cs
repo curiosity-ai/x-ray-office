@@ -490,9 +490,20 @@ public sealed class FormatIdentifier : IFormatIdentifier
         try
         {
             using Stream s = entry.Open();
-            byte[] buffer = new byte[maxBytes];
-            int read = ReadUpTo(s, buffer);
-            return Encoding.UTF8.GetString(buffer, 0, read);
+
+            // Rented, because the ceiling is megabytes and the part is usually a few hundred bytes:
+            // a fresh array per call put two 4 MB allocations on the large object heap for every
+            // OOXML package identified, and a document is identified more than once on opening.
+            byte[] buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(maxBytes);
+            try
+            {
+                int read = ReadUpTo(s, buffer.AsSpan(0, maxBytes));
+                return Encoding.UTF8.GetString(buffer, 0, read);
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
+            }
         }
         catch (InvalidDataException)
         {
