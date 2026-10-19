@@ -499,6 +499,11 @@ format (X-Ray.Office reads), macro execution (never — X-Ray.Office only report
    Repair what you can, skip what you cannot, record it as a `Diagnostic`. Reserve
    exceptions for genuinely unreadable input.
 6. **Zero build warnings.** `TreatWarningsAsErrors` is on solution-wide. Keep it that way.
+7. **Pull requests target our own repository, never LibreOffice's.** The tree here is a
+   reference import of LibreOffice, and nothing in this repository is ever offered upstream.
+   Open every PR against `curiosity-ai/x-ray-office` (base branch `master`), and never
+   against `LibreOffice/core` or any other LibreOffice repository or mirror. If a fix looks
+   like it belongs in LibreOffice, say so to the user and leave the decision to them.
 
 ## Layout
 
