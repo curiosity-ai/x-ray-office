@@ -12,7 +12,7 @@ installation, no COM interop.
 
 X-Ray.Office is the office-document member of the [X-Ray](https://github.com/curiosity-ai/x-ray)
 family of .NET libraries from Curiosity GmbH. Family documentation:
-<https://xray.curiosity.ai/>. It lives in the `dotnet/` folder of a LibreOffice source checkout;
+<https://docs.curiosity.ai/x-ray/>. It lives in the `dotnet/` folder of a LibreOffice source checkout;
 the surrounding C++ tree is the reference the port is read from, and is never built. The port was
 called *Paperless* before it joined the family.
 
