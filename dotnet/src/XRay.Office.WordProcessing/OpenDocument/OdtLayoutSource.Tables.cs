@@ -37,14 +37,27 @@ namespace XRay.Office.WordProcessing.OpenDocument;
 public sealed partial class OdtLayoutSource
 {
     /// <summary>
-    /// Writer's own default cell padding, for a table whose cell style states none.
+    /// The padding of a cell whose style states none: nothing at all.
     /// </summary>
     /// <remarks>
-    /// 0.097 cm, which is 55 twips — an odd number that comes from the 1/100 mm grid the draw layer uses
-    /// rather than from anything a person chose. Both edges of it matter: it comes out of the cell's width,
-    /// so a reader defaulting it to zero breaks a narrow cell's text a line later than Writer does.
+    /// <para>
+    /// Not Writer's 0.097 cm (55 twips, <see cref="CellPadding.Writer"/>). That figure is
+    /// <c>lcl_SetDfltBoxAttr</c>'s <c>aBox.SetAllDistances(55)</c> (<c>sw/source/core/docnode/ndtbl.cxx</c>:117-147),
+    /// and only <c>SwDoc::InsertTable</c> applies it, which is the path of a table inserted through the user
+    /// interface. The ODF import (<c>sw/source/filter/xml/xmltbli.cxx</c>) never sets a box distance, so a cell
+    /// box with no <c>fo:padding</c> keeps the item's own default of zero.
+    /// </para>
+    /// <para>
+    /// LibreOffice's own export always states the padding, which is why no converted document could tell the two
+    /// apart and the 55 twips stood here. A file another producer wrote can: pandoc's cell styles state
+    /// <c>fo:border="none"</c> and nothing else. Measured on 26.8.1.1 with four one-attribute probes of a two-column
+    /// table — no cell style, a style stating only <c>fo:border</c>, an empty style, and the control stating
+    /// <c>fo:padding="0.097cm"</c> — the first three put the text on the cell's edge, rows one line apart, and only
+    /// the control insets it by 2.75 pt; <c>odt/extraction_test.odt</c>'s rows went from 19.3 pt apart to the
+    /// reference's 13.8.
+    /// </para>
     /// </remarks>
-    private static readonly CellPadding DefaultCellPadding = CellPadding.Writer;
+    private static readonly CellPadding DefaultCellPadding = CellPadding.Uniform(Length.Zero);
 
     /// <summary>Reads a table, or returns null when it declares no usable grid.</summary>
     private PageTable? Table(XElement element)
