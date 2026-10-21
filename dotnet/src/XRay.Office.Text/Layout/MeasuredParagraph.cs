@@ -83,6 +83,21 @@ namespace XRay.Office.Text.Layout;
 /// the family class and the language the glyph-fallback pattern is built with; see
 /// <see cref="Fonts.FontItem"/>.
 /// </param>
+/// <param name="Rise">
+/// How far the run is drawn above its baseline, negative below, when it is escaped; zero otherwise.
+/// Only the line's measurement reads it here — see <paramref name="UnescapedEmSize"/>.
+/// </param>
+/// <param name="UnescapedEmSize">
+/// The size the run would take were it not escaped, or zero for a run that is not raised or lowered.
+/// <para>
+/// An escaped portion is measured by Writer's own rule, not as text at its shrunk size:
+/// <c>SwSubFont::CalcEscAscent</c> makes its ascent <c>max(A₂ + rise, A₁)</c> and <c>CalcEscHeight</c> its
+/// descent <c>max(H₂ − A₂ − rise, H₁ − A₁)</c>, where the subscripts are the shrunk and the unshrunk font
+/// (<c>sw/source/core/txtnode/swfont.cxx</c>:495-506 and :965-978). So a raised run grows the line's
+/// ascent by its rise, a lowered one its descent, and even a shrunk one never measures shorter than the
+/// font it was shrunk from. An automatic rise is the case where both maxima land on the unshrunk font.
+/// </para>
+/// </param>
 public readonly record struct FormattedRun(
     int Start,
     int Length,
@@ -92,7 +107,9 @@ public readonly record struct FormattedRun(
     Length MetricEmSize = default,
     Length Tracking = default,
     int WidthPerCent = 100,
-    Fonts.FontItem Item = default)
+    Fonts.FontItem Item = default,
+    Length Rise = default,
+    Length UnescapedEmSize = default)
 {
     /// <summary>One past the run's last character.</summary>
     public int End => Start + Length;
@@ -1151,6 +1168,25 @@ public sealed class MeasuredParagraph
         // eventually move a line onto a different page.
         Length runHeight = Length.FromTwips(run.Metrics.ScaledLineHeight(run.Run.LineEmSize).Twips);
         Length runAscent = Length.FromTwips(run.Metrics.ScaledAscent(run.Run.LineEmSize).Twips);
+
+        // An escaped portion: Writer's CalcEscAscent and CalcEscHeight, over the shrunk font's metrics
+        // (just measured) and the unshrunk font's. See FormattedRun.UnescapedEmSize.
+        if (run.Run.UnescapedEmSize > Length.Zero)
+        {
+            Length original = Length.FromTwips(run.Metrics.ScaledLineHeight(run.Run.UnescapedEmSize).Twips);
+            Length originalAscent = Length.FromTwips(run.Metrics.ScaledAscent(run.Run.UnescapedEmSize).Twips);
+
+            Length raised = runAscent + run.Run.Rise;
+            Length escapedAscent = raised > Length.Zero ? Length.Max(raised, originalAscent) : originalAscent;
+
+            Length lowered = runHeight - runAscent - run.Run.Rise;
+            Length escapedDescent = lowered > Length.Zero
+                ? Length.Max(lowered, original - originalAscent)
+                : original - originalAscent;
+
+            runAscent = escapedAscent;
+            runHeight = escapedAscent + escapedDescent;
+        }
 
         height = Length.Max(height, runHeight);
         ascent = Length.Max(ascent, runAscent);

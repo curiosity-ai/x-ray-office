@@ -227,6 +227,9 @@ public sealed partial class RtfDocumentReader
         /// <summary>The deletion's date.</summary>
         public uint DeletionDate { get; set; }
         public int VerticalPosition { get; set; }
+
+        /// <summary><c>\up</c> or <c>\dn</c>: a half-point offset off the baseline, positive up; 0 for none.</summary>
+        public int PositionHalfPoints { get; set; }
         public int FontIndex { get; set; }
         public int LanguageId { get; set; }
         public int CharacterStyleId { get; set; }
@@ -384,6 +387,7 @@ public sealed partial class RtfDocumentReader
             DeletionAuthor = DeletionAuthor,
             DeletionDate = DeletionDate,
             VerticalPosition = VerticalPosition,
+            PositionHalfPoints = PositionHalfPoints,
             FontIndex = FontIndex,
             LanguageId = LanguageId,
             CharacterStyleId = CharacterStyleId,
@@ -444,6 +448,7 @@ public sealed partial class RtfDocumentReader
             WidthPerCent = 100;
             Revised = false;
             VerticalPosition = 0;
+            PositionHalfPoints = 0;
             CharacterStyleId = 0;
         }
 
@@ -1574,16 +1579,31 @@ public sealed partial class RtfDocumentReader
     /// Both words carry the automatic pair with them: they shrink the text as well as moving it, and neither
     /// number is in the file. LibreOffice's RTF importer turns them straight into <c>w:vertAlign</c>'s two
     /// values, so the answer is the same one the DOCX reader reaches. <c>\up</c> and <c>\dn</c> state a
-    /// half-point offset instead and are not read yet; a document using one gets no shift rather than a
-    /// wrong one.
+    /// half-point offset instead, as <c>w:position</c>'s sprm (<c>rtfdispatchvalue.cxx</c>:943-949, default
+    /// 6), so dmapper defers it to the run and it wins over a <c>\super</c> beside it: a percentage of the
+    /// run's size, rounded, at full size — see <c>WordParagraphFormats.Positioned</c>, which is the same rule.
     /// </remarks>
     private static Layout.Escapement EscapementOf(GroupState state)
-        => state.VerticalPosition switch
+    {
+        if (state.PositionHalfPoints != 0)
+        {
+            double points = SizeOf(state).Points;
+            if (points > 0)
+            {
+                double percent = Math.Round(
+                    state.PositionHalfPoints / 2.0 / points * 100, MidpointRounding.AwayFromZero);
+                int clamped = (int)Math.Clamp(percent, -13999, 13999);
+                return clamped == 0 ? Layout.Escapement.None : new Layout.Escapement(clamped, 100);
+            }
+        }
+
+        return state.VerticalPosition switch
         {
             > 0 => Layout.Escapement.Superscript,
             < 0 => Layout.Escapement.Subscript,
             _ => Layout.Escapement.None,
         };
+    }
 
     /// <summary>
     /// The body's blocks in document order, with the staging list the paragraph recorder appends to.

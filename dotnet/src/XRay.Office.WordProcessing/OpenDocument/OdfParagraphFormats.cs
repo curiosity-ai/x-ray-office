@@ -430,8 +430,8 @@ internal static class OdfParagraphFormats
 
         return parts[0] switch
         {
-            "super" => new Layout.Escapement(Layout.Escapement.AutomaticPercent, proportion),
-            "sub" => new Layout.Escapement(-Layout.Escapement.AutomaticPercent, proportion),
+            "super" => new Layout.Escapement(Layout.Escapement.Automatic, proportion),
+            "sub" => new Layout.Escapement(-Layout.Escapement.Automatic, proportion),
             _ => OdfValue.ParsePercentage(parts[0]) is { } percent
                 ? new Layout.Escapement((int)Math.Round(percent * 100), proportion)
                 : Layout.Escapement.None,

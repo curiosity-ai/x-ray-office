@@ -1054,6 +1054,11 @@ public sealed record PageNote
 /// the family class and the language the glyph-fallback pattern is built with; see
 /// <see cref="XRay.Office.Text.Fonts.FontItem"/>.
 /// </param>
+/// <param name="UnescapedEmSize">
+/// The size the run would take were it not escaped, or zero when it is not raised or lowered at all. Set
+/// beside a non-zero <paramref name="Rise"/>, because an escaped portion's line metrics are Writer's
+/// mixture of its own and the unshrunk font's — see <see cref="FormattedRun.UnescapedEmSize"/>.
+/// </param>
 /// <param name="Link">
 /// Where the run leads when it is clicked, or null when it is not a link. An address is an external
 /// link; an address beginning <c>#</c> names a bookmark in this document. It changes no measurement
@@ -1076,7 +1081,8 @@ public readonly record struct PageRun(
     Length Tracking = default,
     int WidthPerCent = 100,
     FontItem Item = default,
-    string? Link = null)
+    string? Link = null,
+    Length UnescapedEmSize = default)
 {
     /// <summary>One past the run's last character.</summary>
     public int End => Start + Length;
@@ -1137,7 +1143,9 @@ public readonly record struct PageRun(
     /// same character is a line laid out at one width and painted at another.
     /// </remarks>
     public FormattedRun ToFormattedRun()
-        => new(Start, Length, Face, EmSize, Shaping, MetricEmSize, Tracking, WidthPerCent, Item);
+        => new(
+            Start, Length, Face, EmSize, Shaping, MetricEmSize, Tracking, WidthPerCent, Item,
+            UnescapedEmSize > Core.Units.Length.Zero ? Rise : Core.Units.Length.Zero, UnescapedEmSize);
 
     /// <summary>
     /// True when two resolved fonts disagree about whether their glyphs are drawn leaning.

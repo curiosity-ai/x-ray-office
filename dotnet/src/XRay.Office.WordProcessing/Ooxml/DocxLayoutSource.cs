@@ -1562,7 +1562,8 @@ public sealed partial class DocxLayoutSource
                 Tracking: style.Tracking,
                 WidthPerCent: style.WidthPerCent,
                 Item: style.FontItem,
-                Link: range.Link));
+                Link: range.Link,
+                UnescapedEmSize: style.Escapement.Percent != 0 ? style.Size : default));
         }
 
         return varies ? runs : [];

@@ -1452,7 +1452,8 @@ public sealed partial class OdtLayoutSource
                 Underline: style.Underline,
                 IsStruckThrough: style.IsStruckThrough,
                 WidthPerCent: style.WidthPerCent,
-                Link: range.Link));
+                Link: range.Link,
+                UnescapedEmSize: style.Escapement.Percent != 0 ? style.Size : default));
         }
 
         return varies ? runs : [];

@@ -771,7 +771,8 @@ public sealed class RtfDocument : IWordProcessingDocument, IPaginatedDocument
                 Underline: run.Underline,
                 IsStruckThrough: run.IsStruckThrough,
                 WidthPerCent: run.WidthPerCent,
-                Link: run.Link));
+                Link: run.Link,
+                UnescapedEmSize: run.Escapement.Percent != 0 ? run.Size : default));
         }
 
         return varies ? runs : [];

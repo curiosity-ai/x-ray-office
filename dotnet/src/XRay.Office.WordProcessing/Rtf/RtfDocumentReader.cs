@@ -1031,6 +1031,12 @@ public sealed partial class RtfDocumentReader
             case "nosupersub":
                 state.VerticalPosition = 0;
                 return;
+            case "up":
+                state.PositionHalfPoints = token.Parameter ?? 6;
+                return;
+            case "dn":
+                state.PositionHalfPoints = -(token.Parameter ?? 6);
+                return;
             case "v":
                 // Hidden text: not displayed by any reader, so extracting it would inject text
                 // the document does not show.
