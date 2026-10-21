@@ -270,15 +270,7 @@ public sealed record OdfTextFormat
     /// The first family from a CSS family list, unquoted:
     /// <c>'Liberation Serif', serif</c> becomes <c>Liberation Serif</c>.
     /// </summary>
-    private static string? FirstFamily(string? familyList)
-    {
-        if (familyList is null) return null;
-        ReadOnlySpan<char> first = familyList.AsSpan();
-        int comma = first.IndexOf(',');
-        if (comma >= 0) first = first[..comma];
-        first = first.Trim().Trim('\'').Trim('"').Trim();
-        return first.IsEmpty ? null : first.ToString();
-    }
+    private static string? FirstFamily(string? familyList) => OdfFontFamilies.Parse(familyList);
 
     /// <summary>
     /// Assembles a BCP 47 tag from ODF's separate language and country attributes.

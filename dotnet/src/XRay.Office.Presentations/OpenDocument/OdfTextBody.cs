@@ -654,10 +654,8 @@ internal static class OdfTextBody
             ? face.FontFamily
             : fontName;
 
-        int comma = family.IndexOf(',', StringComparison.Ordinal);
-        if (comma >= 0) family = family[..comma];
-
-        return family.Trim().Trim('\'', '"');
+        // The whole list, as LibreOffice keeps it — see `OdfFontFamilies`.
+        return OdfFontFamilies.Parse(family);
     }
 
     /// <summary>

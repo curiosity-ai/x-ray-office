@@ -368,15 +368,8 @@ internal static class OdsShapeText
             ? face.FontFamily ?? name
             : name;
 
-    /// <summary>The first family of a CSS-style list, unquoted.</summary>
-    private static string? FirstFamily(string? list)
-    {
-        if (list is not { Length: > 0 }) return null;
-
-        int comma = list.IndexOf(',', StringComparison.Ordinal);
-        string first = (comma >= 0 ? list[..comma] : list).Trim().Trim('\'', '"');
-        return first.Length == 0 ? null : first;
-    }
+    /// <summary>The families of a CSS-style list — see <see cref="OdfFontFamilies"/>.</summary>
+    private static string? FirstFamily(string? list) => OdfFontFamilies.Parse(list);
 
     private static string? Attribute(XElement element, string ns, string name)
         => element.Attribute(XName.Get(name, ns))?.Value;

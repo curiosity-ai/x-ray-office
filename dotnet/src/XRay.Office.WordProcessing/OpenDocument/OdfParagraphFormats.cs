@@ -836,17 +836,6 @@ internal static class OdfParagraphFormats
     /// <c>'Liberation Serif', 'Times New Roman', serif</c>. Passing that whole string to a font resolver
     /// matches nothing; taking the first name is what LibreOffice does with it.
     /// </remarks>
-    private static string? Unquote(string? family)
-    {
-        if (string.IsNullOrWhiteSpace(family)) return null;
-
-        string first = family.Split(',')[0].Trim();
-        if (first.Length >= 2
-            && ((first[0] == '\'' && first[^1] == '\'') || (first[0] == '"' && first[^1] == '"')))
-        {
-            first = first[1..^1];
-        }
-
-        return first.Length > 0 ? first : null;
-    }
+    /// <summary>The families a list names, joined with <c>;</c> — see <see cref="OdfFontFamilies"/>.</summary>
+    private static string? Unquote(string? family) => OdfFontFamilies.Parse(family);
 }

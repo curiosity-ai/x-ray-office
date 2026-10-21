@@ -885,9 +885,20 @@ public sealed class SystemFontResolver : IFontResolver, IGlyphFallbackResolver
             };
         }
 
+        // A list, `A;B`, which is what an ODF reader hands over for a CSS-style family list.
+        if (request.FamilyName is { } names && names.Contains(';', StringComparison.Ordinal))
+            return ResolveList(request);
+
         // The requested family, if it is here.
         if (_index.Best(request.FamilyName, request.Weight, request.IsItalic) is { } exact)
             return Reference(request, exact, requested: request.FamilyName);
+
+        // Its name without a script suffix: `Times New Roman CYR`. See `StripScript`.
+        if (StripScript(request.FamilyName) is { } stripped
+            && _index.Best(stripped, request.Weight, request.IsItalic) is { } unsuffixed)
+        {
+            return Reference(request, unsuffixed, requested: request.FamilyName);
+        }
 
         // A family fontconfig files under `math` is answered by the orthography, not by a shape,
         // and that beats the document's own declaration. See MathFace.
@@ -988,6 +999,135 @@ public sealed class SystemFontResolver : IFontResolver, IGlyphFallbackResolver
         Record(request, last);
         return Reference(request, last, requested: request.FamilyName);
     }
+
+    /// <summary>Resolves a <c>;</c>-separated family list, token by token.</summary>
+    /// <remarks>
+    /// <para>
+    /// <c>PhysicalFontCollection::FindFontFamily</c> in 26.8.1.1 (tdf#108243, ecd293dd31aa) tries
+    /// each token in order — the name as an installed family, then its metric-compatible
+    /// replacement (<c>aMetricCompatibleMap</c>, followed transitively), then the name with a
+    /// script suffix stripped — and asks the fontconfig pre-match hook only when
+    /// <c>nTokenPos == -1</c>, i.e. for the <em>last</em> token. Before that commit the hook answered
+    /// for the first missing token, and fontconfig always answers, so a later token was never
+    /// reached. So everything but the last token is tried for an exact face here, and the last
+    /// one goes through the whole of the single-name resolution — which is the hook's model —
+    /// keeping the request's declared class and pitch.
+    /// </para>
+    /// <para>
+    /// Measured on 26.8.1.1 with nine two- and three-family lists in a flat ODT
+    /// (<c>probes/calc-anchor-r26/fontlist.fodt</c>), faces read out of the PDF:
+    /// <c>NoSuchFontA, Liberation Mono</c> draws Liberation Mono (26.2.4.2: DejaVu Sans),
+    /// <c>NoSuchFontA, Calibri</c> Carlito, <c>Liberation Serif Greek, Liberation Mono</c>
+    /// Liberation Serif, <c>NoSuchFontA, Courier</c> Liberation Mono — fontconfig's answer for the
+    /// last token — and two missing families declared roman DejaVu Serif.
+    /// </para>
+    /// </remarks>
+    private FontReference ResolveList(FontRequest request)
+    {
+        string[] tokens = request.FamilyName
+            .Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+
+        if (tokens.Length == 0) return Resolve(request with { FamilyName = string.Empty });
+
+        for (int at = 0; at < tokens.Length - 1; at++)
+        {
+            string token = tokens[at];
+            if (Installed(token) is { } face)
+                return Reference(request with { FamilyName = token }, face, requested: token);
+        }
+
+        return Resolve(request with { FamilyName = tokens[^1] });
+
+        InstalledFace? Installed(string token)
+        {
+            if (_index.Best(token, request.Weight, request.IsItalic) is { } exact) return exact;
+
+            // `FindMetricCompatibleFont` follows the map until nothing more matches, so a
+            // BundesSans request goes Calibri and then Carlito.
+            string current = token;
+            for (int guard = 0; guard < MetricCompatible.Length; guard++)
+            {
+                string? next = null;
+                foreach ((string font, string compatible) in MetricCompatible)
+                {
+                    if (FontSubstitutions.Normalise(font) != FontSubstitutions.Normalise(current))
+                        continue;
+
+                    next = compatible;
+                    break;
+                }
+
+                if (next is null) break;
+                if (_index.Best(next, request.Weight, request.IsItalic) is { } compatibleFace)
+                    return compatibleFace;
+
+                current = next;
+            }
+
+            return StripScript(token) is { } stripped
+                ? _index.Best(stripped, request.Weight, request.IsItalic)
+                : null;
+        }
+    }
+
+    /// <summary>
+    /// <c>aMetricCompatibleMap</c> (<c>vcl/source/font/PhysicalFontCollection.cxx</c>:976-993 in
+    /// 26.8.1.1), in its own order.
+    /// </summary>
+    private static readonly (string Font, string Compatible)[] MetricCompatible =
+    [
+        ("Times New Roman", "Liberation Serif"),
+        ("Arial", "Liberation Sans"),
+        ("Arial Narrow", "Liberation Sans Narrow"),
+        ("Courier New", "Liberation Mono"),
+        ("Cambria", "Caladea"),
+        ("Calibri", "Carlito"),
+        ("BundesSans", "Calibri"),
+        ("BundesSans Office", "Calibri"),
+        ("BundesSans Regular", "Calibri"),
+        ("BundesSerif", "Cambria"),
+        ("BundesSerif Office", "Cambria"),
+        ("BundesSerif Regular", "Cambria"),
+    ];
+
+    /// <summary>
+    /// A family name with the script suffixes Windows 3.1 and 95 put into font names removed, or null
+    /// when it carries none.
+    /// </summary>
+    /// <remarks>
+    /// <c>StripScriptFromName</c> (<c>unotools/source/misc/fontdefs.cxx</c>:29-60, fdo#49271):
+    /// <c> baltic</c>, <c> ce</c>, <c> cyr</c>, <c> greek</c>, <c> tur</c> and the four
+    /// parenthesised ones, case-insensitively and repeatedly, so <c>Times New Roman CYR Greek</c>
+    /// is <c>Times New Roman</c>. <c>FindFontFamily</c> tries the result for an installed family
+    /// before it consults fontconfig, for every token of a list and for a single name alike.
+    /// </remarks>
+    /// <param name="familyName">The requested family.</param>
+    public static string? StripScript(string? familyName)
+    {
+        if (string.IsNullOrEmpty(familyName)) return null;
+
+        string name = familyName;
+        bool stripped = true;
+        while (stripped)
+        {
+            stripped = false;
+            foreach (string suffix in ScriptSuffixes)
+            {
+                if (!name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) continue;
+
+                name = name[..^suffix.Length];
+                stripped = true;
+            }
+        }
+
+        return name.Length == familyName.Length || name.Length == 0 ? null : name;
+    }
+
+    private static readonly string[] ScriptSuffixes =
+    [
+        " baltic", " ce", " cyr", " greek", " tur",
+        " (arabic)", " (hebrew)", " (thai)", " (vietnamese)",
+    ];
 
     /// <inheritdoc/>
     public IFontFace LoadFace(FontReference reference)

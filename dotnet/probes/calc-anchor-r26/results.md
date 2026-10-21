@@ -12,3 +12,10 @@ Reference: `/opt/libreoffice26.8/program/soffice` 26.8.1.1, `FONTCONFIG_FILE=/tm
 - `make-fill.py`: `fill2.xlsx` (151 fill cells) and the test fixture. `fillsim.py` fits the
   repeat count's unit against the reference (mm100 for room and rounded text width: 148 of 151;
   720 dpi px: 134; with the printer pixel: 94); `fillcount.py ref.pdf ours.pdf` compares cells.
+- `fontlist.fodt` / `fontlist.fods`: nine family lists (tdf#108243). Faces in 26.8.1.1's PDF, in
+  paragraph order (style:font-name then fo:font-family): LiberationMono LiberationSerif DejaVuSans
+  Carlito Carlito LiberationSerif LiberationMono DejaVuSerif DejaVuSansMono / LiberationMono
+  LiberationSerif DejaVuSans Carlito Carlito LiberationSerif LiberationMono DejaVuSans
+  DejaVuSansMono. This branch: the same except the eighth (DejaVuSans), because the ODT reader
+  does not pass `style:font-family-generic` to the resolver at all (true of single names too;
+  26.2.4.2 answers DejaVuSerif there as well). 26.2.4.2 answered DejaVuSans for A, D, G and I.
