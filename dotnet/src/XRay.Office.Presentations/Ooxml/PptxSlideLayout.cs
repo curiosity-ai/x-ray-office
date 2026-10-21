@@ -992,8 +992,80 @@ internal sealed partial class PptxSlideLayout
                 ShapeTransform.WithoutScale(upright, scaleX, scaleY),
                 theme),
             Shadow = Shadow(properties, inherited, style, theme),
+            Glow = Glow(shape, properties, inherited, style, theme),
+            SoftEdge = SoftEdge(shape, properties, inherited, style, theme),
         };
     }
+
+    /// <summary>
+    /// Whether 26.8.1.1 applies a shape's glow and soft edge twice: true for a custom shape.
+    /// </summary>
+    /// <remarks>
+    /// Every <c>p:sp</c> that is not a presentation object is a
+    /// <c>com.sun.star.drawing.CustomShape</c>, and a custom shape's primitive wraps the
+    /// primitives of the geometry object its engine rendered, which carries the same effect
+    /// items — see <see cref="SlideGlow.Twice"/>. A picture and a presentation object's text
+    /// frame have no such inner object.
+    /// </remarks>
+    private bool EffectsApplyTwice(XElement shape)
+        => shape.Name.LocalName == "sp" && !(_styles?.IsPresentationTextObject(shape) ?? false);
+
+    /// <summary>
+    /// The shape's glow: the first of its own effect list, its placeholder's and the theme's
+    /// that states one, as <c>EffectGlowProperties::assignUsed</c> merges them.
+    /// </summary>
+    /// <remarks>
+    /// The radius goes to the shape in hundredths of a millimetre and the colour's alpha as its
+    /// transparency (<c>oox/source/drawingml/shape.cxx:2309-2317</c> at tag 26.8.1.1). A group
+    /// takes none: the same condition excludes <c>GroupShape</c>.
+    /// </remarks>
+    private SlideGlow? Glow(
+        XElement shape, XElement? properties, XElement?[] inherited, XElement? style, SlideTheme theme)
+    {
+        if (shape.Name.LocalName == "grpSp") return null;
+
+        foreach (XElement? effects in EffectSources(properties, inherited, style, theme))
+        {
+            if (Drawing.Child(effects, "glow") is not { } glow) continue;
+            if (Drawing.Number(glow, "rad") is not { } radius || radius <= 0) return null;
+
+            Colour colour = Colour.Black;
+            foreach (XElement child in glow.Elements())
+            {
+                if (DrawingColour.Read(child)?.Resolve(theme.Colours) is not { } resolved) continue;
+                colour = resolved;
+                break;
+            }
+
+            return new SlideGlow(colour, Length.FromEmu(radius), EffectsApplyTwice(shape));
+        }
+
+        return null;
+    }
+
+    /// <summary>The shape's soft edge, from the same chain as <see cref="Glow"/>.</summary>
+    private SlideSoftEdge? SoftEdge(
+        XElement shape, XElement? properties, XElement?[] inherited, XElement? style, SlideTheme theme)
+    {
+        foreach (XElement? effects in EffectSources(properties, inherited, style, theme))
+        {
+            if (Drawing.Child(effects, "softEdge") is not { } softEdge) continue;
+            if (Drawing.Number(softEdge, "rad") is not { } radius || radius <= 0) return null;
+
+            return new SlideSoftEdge(Length.FromEmu(radius), EffectsApplyTwice(shape));
+        }
+
+        return null;
+    }
+
+    private static XElement?[] EffectSources(
+        XElement? properties, XElement?[] inherited, XElement? style, SlideTheme theme)
+        =>
+        [
+            Drawing.Child(properties, "effectLst"),
+            First(inherited, "effectLst"),
+            DrawingEffects.ThemeEffects(theme.Styles, style),
+        ];
 
     /// <summary>
     /// The drop shadow a shape casts, from its own effect list or from the theme's.

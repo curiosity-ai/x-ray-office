@@ -192,6 +192,12 @@ public sealed record PlacedShape
     /// <summary>The drop shadow it casts, or null when it casts none.</summary>
     public SlideShadow? Shadow { get; init; }
 
+    /// <summary>The glow around it, or null when it has none. See <see cref="SlideEffects"/>.</summary>
+    public SlideGlow? Glow { get; init; }
+
+    /// <summary>The soft edge it fades out over, or null when it has none.</summary>
+    public SlideSoftEdge? SoftEdge { get; init; }
+
     private readonly GraphicsPath? _fillOutline;
     private readonly GraphicsPath? _strokeOutline;
 }
