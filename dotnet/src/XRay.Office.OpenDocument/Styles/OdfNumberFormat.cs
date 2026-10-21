@@ -196,13 +196,22 @@ public static class OdfNumberFormat
     /// sat.
     /// </para>
     /// <para>
-    /// <strong>Only ten values survive the round trip, and that is the reference's own behaviour
-    /// rather than a shortcut here.</strong> <c>aNumFmtStdColors</c> (<c>:212-226</c>) is the same
-    /// ten in the same order as <c>ImpSvNumberformatScan::StandardColor</c> — the table
-    /// <c>NumberFormatSection</c> already reads the other way — and a colour that is not one of
-    /// them matches nothing, leaves <c>aColName</c> empty and is dropped. So a section stating
-    /// <c>#262626</c> is black on both sides, and a reader that resolved arbitrary RGB here would
-    /// paint ink 26.2.4.2 does not.
+    /// <strong>The ten keyword colours come first</strong>: <c>aNumFmtStdColors</c>
+    /// (<c>:212-226</c>) is the same ten in the same order as
+    /// <c>ImpSvNumberformatScan::StandardColor</c>, the table <c>NumberFormatSection</c> reads the
+    /// other way.
+    /// </para>
+    /// <para>
+    /// <strong>Then the standard palette, since 26.8.1.1.</strong> tdf#146404 (d74f55ef4f06, in
+    /// 26.8.1.1, not in 26.2.4.2) added a second lookup to <c>AddColor</c>:
+    /// <c>SvNumberFormatter::GetUserDefColorIndex</c>, which Calc answers with
+    /// <c>XColorList::GetIndexOfColor</c> over <c>standard.soc</c>, and a hit is written
+    /// <c>[COLORn]</c> with <c>n</c> one-based. Any other colour still matches nothing and is
+    /// dropped. Measured on 26.8.1.1: <c>#2a6099</c> (entry 21) and <c>#81d41a</c> (entry 24)
+    /// are painted, <c>#123456</c> stays black — and <c>#3465a4</c> (entry 81) makes the format
+    /// <em>invalid</em>, because the scanner reads only <c>1..64</c>, so that cell prints in the
+    /// standard format. Both halves follow from emitting the code LibreOffice emits and letting
+    /// <see cref="NumberFormatSection"/> read it.
     /// </para>
     /// </remarks>
     private static string? Colour(XElement style)
@@ -230,7 +239,9 @@ public static class OdfNumberFormat
             0x808080 => "[GREY]",
             0xFFFF00 => "[YELLOW]",
             0xFFFFFF => "[WHITE]",
-            _ => null,
+            _ => StandardPalette.IndexOf(rgb) is var index and >= 0
+                ? string.Create(CultureInfo.InvariantCulture, $"[COLOR{index + 1}]")
+                : null,
         };
     }
 

@@ -151,6 +151,21 @@ public class OdfNumberFormatSectionsTests
               <number:number number:decimal-places="1" number:min-decimal-places="1" number:min-integer-digits="1"/>
             </number:number-style>
             """,
+
+        // A colour in neither list, and a palette colour past the scanner's 64 — both measured
+        // on 26.8.1.1 with `calc-probes/numcolour2.fods`.
+        ["N156"] = """
+            <number:number-style style:name="N156">
+              <style:text-properties fo:color="#123456"/>
+              <number:number number:decimal-places="1" number:min-decimal-places="1" number:min-integer-digits="1"/>
+            </number:number-style>
+            """,
+        ["N157"] = """
+            <number:number-style style:name="N157">
+              <style:text-properties fo:color="#3465a4"/>
+              <number:number number:decimal-places="3" number:min-decimal-places="3" number:min-integer-digits="1"/>
+            </number:number-style>
+            """,
     };
 
     private static XElement Named(string name)
@@ -209,15 +224,39 @@ public class OdfNumberFormatSectionsTests
         section.Colour.ShouldBe(colour is { } rgb ? Colour.FromRgb((uint)rgb) : null);
     }
 
+    /// <summary>
+    /// A palette colour that is none of the ten keywords becomes <c>[COLORn]</c> and is painted.
+    /// </summary>
+    /// <remarks>
+    /// tdf#146404 (d74f55ef4f06, in 26.8.1.1): <c>AddColor</c> asks the document's colour list for
+    /// the colour's index and writes it one-based. <c>#dddddd</c> is entry 10 of
+    /// <c>standard.soc</c>. Before 26.8.1.1 it was dropped, and this test asserted that.
+    /// </remarks>
     [Fact]
-    public void AColourThatIsNotOneOfTheTenIsDropped()
+    public void APaletteColourIsKeptAsItsPaletteIndex()
     {
-        // `[COLOR10]` is the palette at the running installation's own standard.soc, which
-        // 26.2.4.2 resolves to #dddddd and its own ODF export writes as an RGB value. AddColor
-        // matches that against ten constants and nothing else, so the reference drops it on
-        // re-import too — a reader resolving arbitrary RGB here would paint ink it does not.
-        Code("N155").ShouldBe("0.0");
-        NumberFormatCode.Parse(Code("N155")!).Sections[0].Colour.ShouldBeNull();
+        Code("N155").ShouldBe("[COLOR10]0.0");
+        NumberFormatCode.Parse(Code("N155")!).Sections[0].Colour
+            .ShouldBe(Colour.FromRgb(0xDDDDDD));
+    }
+
+    [Fact]
+    public void AColourOutsideThePaletteIsStillDropped()
+    {
+        Code("N156").ShouldBe("0.0");
+        NumberFormatCode.Parse(Code("N156")!).Sections[0].Colour.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// Entry 81 is written <c>[COLOR81]</c>, which the scanner refuses, so the cell keeps the
+    /// standard format — 26.8.1.1 prints <c>1001.5</c> in black where three decimals were asked.
+    /// </summary>
+    [Fact]
+    public void APaletteColourPastSixtyFourMakesTheFormatGeneral()
+    {
+        Code("N157").ShouldBe("[COLOR81]0.000");
+        NumberFormatCode.Parse(Code("N157")).IsGeneral.ShouldBeTrue();
+        OdfNumberFormat.Parse(Named("N157")).ShouldBeNull();
     }
 
     [Fact]
@@ -249,7 +288,9 @@ public class OdfNumberFormatSectionsTests
     [InlineData("N152", "[>0]0.0;[<0][RED]-0.0;[BLUE]0.0")]
     [InlineData("N153", """#,##0" ";[RED](#,##0)""")]
     [InlineData("N154", """[>=100]"big "0;[<0]"neg "0;0.0""")]
-    [InlineData("N155", "0.0")]
+    // 26.8.1.1's own `sdnum` for N155 is `[COLOR10]0.0` (26.2.4.2's was `0.0`): tdf#146404 maps a
+    // palette colour back to its index. Read from 26.8.1.1's HTML export of the same fixture.
+    [InlineData("N155", "[COLOR10]0.0")]
     public void TheAssembledCodeIsTheReferencesOwn(string name, string expected)
         => Code(name).ShouldBe(expected);
 

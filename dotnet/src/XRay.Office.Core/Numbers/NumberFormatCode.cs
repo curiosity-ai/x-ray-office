@@ -99,7 +99,13 @@ public sealed class NumberFormatCode
         List<NumberFormatSection> sections = [];
         foreach (string part in SplitSections(code))
         {
-            sections.Add(NumberFormatSection.Parse(part));
+            NumberFormatSection section = NumberFormatSection.Parse(part);
+
+            // A colour LibreOffice cannot resolve cancels the whole code, and the cell keeps
+            // the standard format: see `NumberFormatSection.IsInvalid`.
+            if (section.IsInvalid) return General;
+
+            sections.Add(section);
             // Excel reads at most four subformats; a code with more is malformed and the
             // extra ones are unreachable.
             if (sections.Count == 4) break;

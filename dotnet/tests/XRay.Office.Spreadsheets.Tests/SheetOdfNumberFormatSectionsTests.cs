@@ -19,7 +19,10 @@ namespace XRay.Office.Spreadsheets.Tests;
 /// </para>
 /// <para>
 /// Every expectation below was read out of the reference's own PDF of this file before it was
-/// written down. On the three rows that matter the two renderings agree span for span and colour
+/// written down. Column E is <c>[COLOR10]0.0</c>, exported as <c>fo:color="#dddddd"</c>: 26.2.4.2
+/// drops that colour on re-import and <strong>26.8.1.1 paints it</strong>, three shows of <c>#dddddd</c> in its
+/// own PDF of this file, because tdf#146404 (d74f55ef4f06) maps a palette colour back to
+/// <c>[COLORn]</c>. The column's expectations follow 26.8.1.1. On the three rows that matter the two renderings agree span for span and colour
 /// for colour; the assertions here are on the cells the section rule decides.
 /// </para>
 /// </remarks>
@@ -78,7 +81,7 @@ public sealed class SheetOdfNumberFormatSectionsTests
         => Row(1).ShouldBe([
             "(100) #000000",
             "(100) #ff0000",
-            "-100.0 #000000",
+            "-100.0 #dddddd",
             "-100.0 #ff0000",
             "-100.00 #000000",
             "neg 100 #000000",
@@ -88,24 +91,23 @@ public sealed class SheetOdfNumberFormatSectionsTests
     public void TheZeroRowTakesTheOwningStylesOwnBodyAndItsColour()
         // Column A's element carries the ZERO section and its two maps carry positive and
         // negative, so the blue belongs here and nowhere else. Column E is `[COLOR10]0.0`, whose
-        // `fo:color="#dddddd"` is not one of the ten keyword colours and is dropped by the
-        // reference on re-import as well — hence a second, black `0.0` rather than a pale one.
+        // `fo:color="#dddddd"` is palette entry 10: 26.8.1.1 paints it (26.2.4.2 dropped it).
         => Row(2).ShouldBe([
             "- #000000",
             "0 #000000",
             "0.0 #000000",
-            "0.0 #000000",
             "0.0 #0000ff",
+            "0.0 #dddddd",
             "0.00 #000000",
         ]);
 
     [Fact]
-    public void ThePositiveRowTakesTheMappedSectionsAndIsUncoloured()
+    public void ThePositiveRowTakesTheMappedSections()
         => Row(0).ShouldBe([
             "150 #000000",
             "150 #000000",
             "150.0 #000000",
-            "150.0 #000000",
+            "150.0 #dddddd",
             "150.00 #000000",
             "big 150 #000000",
         ]);
