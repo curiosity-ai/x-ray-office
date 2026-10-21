@@ -59,7 +59,8 @@ public sealed class OdtTableRowHeightTests
             : XElement.Parse(
                 $"""
                  <office:settings xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
-                                  xmlns:config="urn:oasis:names:tc:opendocument:xmlns:config:1.0">
+                                  xmlns:config="urn:oasis:names:tc:opendocument:xmlns:config:1.0"
+                                  xmlns:ooo="http://openoffice.org/2004/office">
                    <config:config-item-set config:name="ooo:configuration-settings">
                      <config:config-item config:name="MinRowHeightInclBorder"
                                          config:type="boolean">{stated}</config:config-item>

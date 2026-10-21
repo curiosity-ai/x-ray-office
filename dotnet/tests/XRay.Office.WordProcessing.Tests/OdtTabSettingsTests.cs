@@ -139,6 +139,24 @@ public sealed class OdtTabSettingsTests
         return styles;
     }
 
+    /// <summary>
+    /// A configuration set whose <c>ooo:</c> prefix the document never declares is not read at all, so
+    /// Writer's own default stands whatever its item says.
+    /// </summary>
+    /// <remarks>
+    /// Measured on the 26.8 daily: <c>TabsRelativeToIndent</c> false puts a tab after a 1 in indent at
+    /// 200.80 pt with <c>xmlns:ooo</c> declared and at 272.80 — the default's answer — without it.
+    /// </remarks>
+    [Fact]
+    public void AnUndeclaredConfigurationPrefixIsNotRead()
+    {
+        XElement settings = Settings("TabsRelativeToIndent", "false");
+        settings.Attributes().Where(attribute => attribute.IsNamespaceDeclaration).Remove();
+
+        OdtLayoutSource.TabsRelativeToIndent(settings).ShouldBeTrue();
+        OdtLayoutSource.TabsRelativeToIndent(Settings("TabsRelativeToIndent", "false")).ShouldBeFalse();
+    }
+
     /// <summary>A settings tree stating one item, in the shape LibreOffice's own export writes.</summary>
     /// <param name="name">The item's <c>config:name</c>.</param>
     /// <param name="value">Its value, or null to state no item at all.</param>
@@ -160,6 +178,9 @@ public sealed class OdtTabSettingsTests
                 value));
         }
 
-        return new XElement(office + "settings", set);
+        return new XElement(
+            office + "settings",
+            new XAttribute(XNamespace.Xmlns + "ooo", "http://openoffice.org/2004/office"),
+            set);
     }
 }

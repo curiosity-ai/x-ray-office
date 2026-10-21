@@ -83,6 +83,9 @@ public sealed class OdtFlySettingsTests
                 value));
         }
 
-        return new XElement(office + "settings", set);
+        return new XElement(
+            office + "settings",
+            new XAttribute(XNamespace.Xmlns + "ooo", "http://openoffice.org/2004/office"),
+            set);
     }
 }
