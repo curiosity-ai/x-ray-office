@@ -451,6 +451,10 @@ public sealed partial class RtfDocumentReader
         // the default", and RTF's toggles cannot express that in the group state alone.
         state.StyleSheetStated?.Add(token.Name);
 
+        // A paragraph's border and shading words, which share their describing words with a cell's and a
+        // page's and so have to know which of the three was selected last.
+        if (HandleParagraphBorderWord(token, state)) return;
+
         switch (token.Name)
         {
             // ---- document-level settings

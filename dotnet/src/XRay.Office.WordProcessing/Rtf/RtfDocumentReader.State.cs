@@ -339,6 +339,26 @@ public sealed partial class RtfDocumentReader
         /// </summary>
         public RtfParagraphFrame Frame { get; set; }
 
+        /// <summary>
+        /// The paragraph's border words so far, side by side: part of the paragraph sprms in writerfilter, so
+        /// copied into a nested group and cleared by <c>\pard</c>.
+        /// </summary>
+        public RtfBorderDrafts ParagraphBorders { get; set; }
+
+        /// <summary>
+        /// Which paragraph side the describing words (<c>\brdrw</c>, <c>\brdrcf</c>, <c>\brsp</c>, the style
+        /// words) now apply to, or null when another scope — a cell, the page, a run — holds them.
+        /// </summary>
+        /// <remarks>
+        /// <c>RTFParserState::m_nBorderState</c>, which <em>is</em> group state and which <c>\pard</c> does not
+        /// reset (<c>rtfdocumentimpl.hxx</c>:540; only the five selectors in <c>rtfdispatchflag.cxx</c>:643-801
+        /// ever set it). <see cref="RtfBorderDrafts.Box"/> is <c>\box</c>, which describes all four sides at once.
+        /// </remarks>
+        public int? ParagraphBorderSide { get; set; }
+
+        /// <summary><c>\cbpat</c>: the paragraph's background, as a colour-table index, or null for none.</summary>
+        public int? ShadingColourIndex { get; set; }
+
         public GroupState Clone() => new()
         {
             Destination = Destination,
@@ -398,6 +418,9 @@ public sealed partial class RtfDocumentReader
             StartsNewPage = StartsNewPage,
             HasContextualSpacing = HasContextualSpacing,
             Frame = Frame,
+            ParagraphBorders = ParagraphBorders,
+            ParagraphBorderSide = ParagraphBorderSide,
+            ShadingColourIndex = ShadingColourIndex,
             // Deliberately not inherited: a nested group collects its own text, and the
             // stylesheet and font-table bookkeeping belongs to the entry that declared it.
         };
@@ -455,6 +478,11 @@ public sealed partial class RtfDocumentReader
             StartsNewPage = false;
             HasContextualSpacing = false;
             Frame = default;
+
+            // The borders and the shading are paragraph sprms, which \pard replaces; the border *selection*
+            // is not, and stays where it was (see ParagraphBorderSide).
+            ParagraphBorders = default;
+            ShadingColourIndex = null;
         }
     }
 
@@ -1485,7 +1513,9 @@ public sealed partial class RtfDocumentReader
 
             // writerfilter does not turn a paragraph inside a table into a frame
             // (`CheckUnregisteredFrameConversion`, `DomainMapper_Impl.cxx`:2085-2097).
-            flow.InTable ? null : state.Frame.Request());
+            flow.InTable ? null : state.Frame.Request(),
+            state.ParagraphBorders.ToSet(ColourAt),
+            ColourAt(state.ShadingColourIndex));
 
         if (cell is not null) cell.Add(new RtfLayoutBlock(recorded));
         else into!.Add(recorded);
