@@ -60,10 +60,12 @@ public static class DropCaps
     /// <param name="distance">The gap after the drop.</param>
     /// <param name="breakWidth">The width the paragraph is broken at.</param>
     /// <param name="resetsSize">
-    /// True when every letter is first set back to the paragraph's own size, as writerfilter and the WW8
-    /// filter both do (<c>setPropertyToDefault(PROP_CHAR_HEIGHT)</c>, <c>DomainMapper_Impl.cxx</c>:2516;
-    /// <c>m_xCtrlStck-&gt;Delete</c>, <c>ww8par.cxx</c>:4011-4015). It decides nothing but the size the
-    /// scale starts from and the height the first line is given for the drop.
+    /// True when every letter is first set back to the paragraph's own size and baseline, as writerfilter
+    /// does (<c>setPropertyToDefault(PROP_CHAR_HEIGHT)</c> and the escapement, <c>DomainMapper_Impl.cxx</c>:2516).
+    /// The WW8 filter does not: its <c>m_xCtrlStck-&gt;Delete</c> (<c>ww8par.cxx</c>:3983-3987) reaches only
+    /// attributes still open, and the 26.8 daily keeps a Word drop cap's stated size and lowered position.
+    /// The size decides only where the scale starts and the height the first line is given; a position is
+    /// kept, scaled with the letters.
     /// </param>
     public static PageParagraph Apply(
         PageParagraph host,
@@ -179,11 +181,13 @@ public static class DropCaps
         long factor = Factor(letters.Text, runs, wished, keepsBaseline, out long descent);
         if (factor <= 0) return null;
 
+        // A rise is a fraction of the face's height, so it scales with the letters. Only a WW8 drop keeps
+        // one; the other importers reset the letters' escapement before they drop.
         List<PageRun> scaled = [.. runs.Select(run => run with
         {
             EmSize = Scaled(run.EmSize, factor),
             MetricEmSize = run.MetricEmSize == Length.Zero ? Length.Zero : Scaled(run.MetricEmSize, factor),
-            Rise = Length.Zero,
+            Rise = Scaled(run.Rise, factor),
         })];
 
         Length advance = Length.Zero;

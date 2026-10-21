@@ -677,6 +677,25 @@ public sealed class Ww8Document : IWordProcessingDocument, IPaginatedDocument
                 paragraph.FamilyName, paragraph.Weight, paragraph.IsItalic);
             if (face is null) continue;
 
+            if (paragraph.DropLetters is { } drop)
+            {
+                // The drop-cap paragraph's own formatting survives on the letters, its escapement
+                // included: the importer's `m_xCtrlStck->Delete` (`ww8par.cxx`:3983-3987) removes only
+                // attributes still open on the stack, and 26.8's own flat export of a Word drop cap
+                // keeps the run's size and its `style:text-position`.
+                List<PageParagraph> merged = Convert(
+                    fonts, [paragraph with { DropLetters = null }], textWidths);
+                List<PageParagraph> letters = Convert(fonts, [drop.Letters], textWidths);
+                if (merged.Count == 0) continue;
+
+                paragraphs.Add(letters.Count == 0
+                    ? merged[0]
+                    : DropCaps.Apply(
+                        merged[0], letters[0], drop.Lines, Length.FromTwips(drop.Distance),
+                        WidthFor(paragraph), resetsSize: false));
+                continue;
+            }
+
             FontReference? font = fonts.Reference(
                 paragraph.FamilyName, paragraph.Weight, paragraph.IsItalic);
 

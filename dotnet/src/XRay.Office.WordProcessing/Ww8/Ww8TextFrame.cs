@@ -225,3 +225,14 @@ public static class Ww8TextFrames
             _ => (FrameHorizontalAlignment.Offset, Length.FromTwips(x)),
         };
 }
+
+/// <summary>A WW8 drop cap specifier: how many lines the drop spans and the gap after it.</summary>
+/// <param name="Lines">The DCS's line count, its first byte shifted right by three.</param>
+/// <param name="Distance">The drop-cap paragraph's <c>sprmPDxaFromText</c>, in twips.</param>
+public readonly record struct Ww8DropCap(int Lines, int Distance);
+
+/// <summary>A drop-cap paragraph merged into the paragraph after it, whose dropped capital it becomes.</summary>
+/// <param name="Letters">The drop-cap paragraph, whose whole text drops.</param>
+/// <param name="Lines">The lines the drop spans.</param>
+/// <param name="Distance">The gap after the drop, in twips.</param>
+public sealed record Ww8DropLetters(Ww8DocumentReader.Ww8LayoutParagraph Letters, int Lines, int Distance);
