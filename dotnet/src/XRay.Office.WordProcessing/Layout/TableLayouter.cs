@@ -285,12 +285,16 @@ public static class TableLayouter
                 continue;
             }
 
+            (PlacedFlow? content, bool clips) = ClippedToExactRow(
+                Positioned(cell, area, bandAbove, bandBelow), area, table.Rows[cell.LastRow].HasExactHeight);
+
             placed.Add(new PlacedTableCell
             {
                 Cell = cell.Cell,
                 Area = area,
-                Content = Positioned(cell, area, bandAbove, bandBelow),
+                Content = content,
                 Row = cell.Row,
+                ClipsContent = clips,
             });
         }
 
@@ -1417,6 +1421,49 @@ public static class TableLayouter
 
         // The height comes from the cell rather than from the content, since the row may be taller.
         return moved with { Area = placed };
+    }
+
+    /// <summary>
+    /// Trims an exact-height row's overflowing text to the lines Writer paints, and says whether what is
+    /// left has to be clipped.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A cell's text frame in a row too short for it is undersized, and <c>SwTextFrame::PaintSwFrame</c>
+    /// then paints it under an <c>SwSaveClip</c> and stops at the first line that starts below the paint
+    /// rectangle — <c>while( aLine.Next() &amp;&amp; aLine.Y() &lt;= nBottom )</c>
+    /// (<c>sw/source/core/text/frmpaint.cxx</c>:781-793). So a line that starts inside the cell is drawn
+    /// and cut at the cell's edge, and every line after it is not drawn at all: no text operator, absent
+    /// from the text layer as well as from the ink. 26.8.1.1's tdf#171263 (backport 7f3a784299b3) extends
+    /// the clip to a PDF export of a frame that is <em>not</em> undersized; for a cell that overflows its
+    /// exact row the two releases already agree.
+    /// </para>
+    /// <para>
+    /// Measured on an authored one-cell row of <c>w:trHeight w:val="400" w:hRule="exact"</c> holding five
+    /// lines' worth of text, against both 26.8.1.1 and 26.2.4.2, which render it identically: the first
+    /// two lines are in the text layer, the second's ink ends at the cell's bottom rule (105.6 pt) where
+    /// this tree drew its descenders 4 pt below it, and the three lines that start below the cell are not
+    /// drawn at all where this tree drew them over the next row.
+    /// </para>
+    /// </remarks>
+    /// <param name="content">The cell's positioned text.</param>
+    /// <param name="area">The cell's rectangle.</param>
+    /// <param name="isExact">Whether the row the cell ends in has an exact height.</param>
+    private static (PlacedFlow? Content, bool Clips) ClippedToExactRow(
+        PlacedFlow? content, DocRect area, bool isExact)
+    {
+        if (!isExact || content is null) return (content, false);
+        if (content.Area.Y + FlowLayouter.Extent(content) <= area.Bottom) return (content, false);
+
+        // The first line is always painted, whatever its position — the loop tests only after `Next()`.
+        List<PlacedLine> kept = [];
+        foreach (PlacedLine line in content.Lines)
+        {
+            if (kept.Count > 0 && content.Area.Y + line.Top > area.Bottom) break;
+            kept.Add(line);
+        }
+
+        return (kept.Count == content.Lines.Count ? content : content with { Lines = kept }, true);
     }
 
     /// <summary>

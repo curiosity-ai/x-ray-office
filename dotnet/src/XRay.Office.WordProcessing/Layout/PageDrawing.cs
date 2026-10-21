@@ -760,7 +760,23 @@ public static class PageDrawing
     {
         if (cell.ContentTransform is not { } onto)
         {
-            DrawFlow(cell.Content, sink, background);
+            // An exact row's overflow is cut at the cell's edge — see `TableLayouter.ClippedToExactRow`,
+            // which has already dropped the lines that start below it.
+            if (cell.ClipsContent)
+            {
+                sink.Save();
+                sink.ClipPath(GraphicsPath.Rectangle(cell.Area));
+            }
+
+            try
+            {
+                DrawFlow(cell.Content, sink, background);
+            }
+            finally
+            {
+                if (cell.ClipsContent) sink.Restore();
+            }
+
             return;
         }
 
