@@ -714,6 +714,13 @@ public sealed record WritingSection
     public PageGeometry Page { get; init; } = PageGeometry.Default;
 
     /// <summary>
+    /// The page style's text grid, or null for none; its <see cref="Text.Layout.TextGridSnap.Snaps"/> is
+    /// the reader's to decide per paragraph. Only the DOC reader sets it here — the DOCX one keeps its own
+    /// per-section list.
+    /// </summary>
+    public Text.Layout.TextGridSnap? TextGrid { get; init; }
+
+    /// <summary>
     /// How the section starts relative to the one before it.
     /// </summary>
     /// <remarks>

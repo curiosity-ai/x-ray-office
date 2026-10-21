@@ -10,6 +10,7 @@ using XRay.Office.Core.Graphics;
 using XRay.Office.Core.Units;
 using XRay.Office.MsBinary.PropertySets;
 using XRay.Office.Text.Fonts;
+using XRay.Office.Text.Layout;
 using XRay.Office.WordProcessing.Layout;
 
 namespace XRay.Office.WordProcessing.Ww8;
@@ -217,7 +218,7 @@ public sealed class Ww8Document : IWordProcessingDocument, IPaginatedDocument
             DeclaredShapes = _reader.Fonts.ShapeOf,
         };
 
-        List<PageBlock> blocks = BlocksOf(fonts, _reader.ReadLayoutBlocks(), TextWidths());
+        List<PageBlock> blocks = BlocksOf(fonts, _reader.ReadLayoutBlocks(), TextWidths(), BodyGrid());
 
         PaginationOptions pagination = PaginationOptions.Word with
         {
@@ -256,6 +257,28 @@ public sealed class Ww8Document : IWordProcessingDocument, IPaginatedDocument
         return new WordProcessingPages(
             paginator.Paginate(blocks, sections),
             paginator.Blocks ?? blocks);
+    }
+
+    /// <summary>
+    /// Which text grid a body paragraph snaps to: its section's, unless the paragraph turns it off.
+    /// </summary>
+    /// <remarks>
+    /// A cell's paragraph keeps its text's own height and takes no line spacing when the document sets
+    /// <c>fDontAdjustLineHeightInTable</c> (tdf#167583), exactly as a DOCX without
+    /// <c>w:adjustLineHeightInTable</c>. See <see cref="TextGridSnap"/>.
+    /// </remarks>
+    private Func<Ww8DocumentReader.Ww8LayoutParagraph, TextGridSnap?>? BodyGrid()
+    {
+        IReadOnlyList<Model.WritingSection> sections = Sections;
+        if (!sections.Any(section => section.TextGrid is not null)) return null;
+
+        bool offInTables = _reader.DocumentProperties.KeepsTableLinesOffTheGrid;
+
+        return paragraph =>
+            !paragraph.IgnoresPageGrid
+            && sections[Math.Clamp(paragraph.SectionIndex, 0, sections.Count - 1)].TextGrid is { } grid
+                ? grid with { Snaps = !paragraph.IsInTable || !offInTables }
+                : null;
     }
 
     /// <summary>
@@ -573,10 +596,15 @@ public sealed class Ww8Document : IWordProcessingDocument, IPaginatedDocument
     /// Each section's text width, for the one thing that needs it — an auto-width text frame. Empty
     /// inside a cell, where a frame is not read in the first place.
     /// </param>
+    /// <param name="grids">
+    /// The text grid each paragraph snaps to, or null outside the body: only the body's own paragraphs and its
+    /// tables' are on the page's grid (<c>IsInDocBody</c>, <c>sw/source/core/text/inftxt.cxx</c>:334).
+    /// </param>
     private static List<PageBlock> BlocksOf(
         LayoutFonts fonts,
         IReadOnlyList<Ww8LayoutBlock> stated,
-        IReadOnlyList<Length>? textWidths = null)
+        IReadOnlyList<Length>? textWidths = null,
+        Func<Ww8DocumentReader.Ww8LayoutParagraph, TextGridSnap?>? grids = null)
     {
         List<PageBlock> blocks = new(stated.Count);
 
@@ -584,7 +612,7 @@ public sealed class Ww8Document : IWordProcessingDocument, IPaginatedDocument
         {
             if (block.Paragraph is { } paragraph)
             {
-                blocks.AddRange(Convert(fonts, [paragraph], textWidths)
+                blocks.AddRange(Convert(fonts, [paragraph], textWidths, grids)
                     .Select(converted => (PageBlock)(converted with
                     {
                         SectionIndex = paragraph.SectionIndex,
@@ -592,7 +620,7 @@ public sealed class Ww8Document : IWordProcessingDocument, IPaginatedDocument
                 continue;
             }
 
-            if (block.Table is { } table && Grid(fonts, table) is { } grid) blocks.Add(grid);
+            if (block.Table is { } table && Grid(fonts, table, grids) is { } grid) blocks.Add(grid);
         }
 
         // Every flow a DOC has passes through here — the body, each header and footer, each note, each
@@ -604,7 +632,10 @@ public sealed class Ww8Document : IWordProcessingDocument, IPaginatedDocument
     }
 
     /// <summary>A recorded table as the layout engine's own, or null when it has no usable grid.</summary>
-    private static PageTable? Grid(LayoutFonts fonts, Ww8LayoutTable table)
+    private static PageTable? Grid(
+        LayoutFonts fonts,
+        Ww8LayoutTable table,
+        Func<Ww8DocumentReader.Ww8LayoutParagraph, TextGridSnap?>? grids = null)
     {
         if (table.ColumnWidths.Count == 0 || table.Rows.Count == 0) return null;
 
@@ -617,7 +648,7 @@ public sealed class Ww8Document : IWordProcessingDocument, IPaginatedDocument
             {
                 cells.Add(new PageTableCell
                 {
-                    Blocks = BlocksOf(fonts, [.. cell.Blocks]),
+                    Blocks = BlocksOf(fonts, [.. cell.Blocks], grids: grids),
                     Column = cell.Column,
                     ColumnSpan = cell.ColumnSpan,
                     RowSpan = cell.RowSpan,
@@ -667,7 +698,8 @@ public sealed class Ww8Document : IWordProcessingDocument, IPaginatedDocument
     private static List<PageParagraph> Convert(
         LayoutFonts fonts,
         List<Ww8DocumentReader.Ww8LayoutParagraph> stated,
-        IReadOnlyList<Length>? textWidths = null)
+        IReadOnlyList<Length>? textWidths = null,
+        Func<Ww8DocumentReader.Ww8LayoutParagraph, TextGridSnap?>? grids = null)
     {
         List<PageParagraph> paragraphs = new(stated.Count);
 
@@ -690,7 +722,9 @@ public sealed class Ww8Document : IWordProcessingDocument, IPaginatedDocument
                 Face = face,
                 Font = font,
                 Colour = paragraph.Colour ?? Colour.Transparent,
-                Format = paragraph.Format,
+                Format = grids?.Invoke(paragraph) is { } snap
+                    ? paragraph.Format with { TextGrid = snap }
+                    : paragraph.Format,
                 Label = Label(fonts, paragraph, face, font),
                 Borders = paragraph.Borders,
                 EmSize = paragraph.Size,

@@ -149,6 +149,37 @@ public readonly record struct Ww8DocumentProperties
 
     public bool HasFacingPages { get; init; }
 
+    /// <summary>
+    /// <c>fAutoHyphen</c>: the document hyphenates automatically, unless a paragraph's style or its own
+    /// <c>sprmPFNoAutoHyph</c> says otherwise.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Bit 0x10 of the byte at 0x05 (<c>WW8Dop::WW8Dop</c>, <c>sw/source/filter/ww8/ww8scan.cxx</c>:7656-7662).
+    /// <c>WW8RStyle::Import</c> puts a hyphenation item with two-and-two minima and no limit on consecutive
+    /// lines on the Standard style when this is set and that style states none of its own
+    /// (<c>ww8par2.cxx</c>:4557-4571).
+    /// </para>
+    /// <para>
+    /// <strong>It is the only hyphenation field the import reads.</strong> <c>dxaHotZ</c>,
+    /// <c>cConsecHypLim</c> and <c>fHyphCapitals</c> are parsed into the <c>WW8Dop</c> and never consulted:
+    /// measured on 26.8's daily, a <c>.doc</c> whose hot zone is patched from 360 to 5000 twips, whose
+    /// consecutive-line limit is patched to one and whose capitals flag is cleared breaks every one of its
+    /// ten hyphenated lines where the unpatched file does (<c>probes/words-dochyph/</c>).
+    /// </para>
+    /// </remarks>
+    public bool AutoHyphenation { get; init; }
+
+    /// <summary>
+    /// <c>fDontAdjustLineHeightInTable</c>: a table cell's paragraph on a text grid keeps its text's own
+    /// height and takes no line spacing. See <see cref="Text.Layout.TextGridSnap.Snaps"/>.
+    /// </summary>
+    /// <remarks>
+    /// Stated this way round so that a <c>Dop</c> too short to carry it (Word 97) reads as clear, which is
+    /// what the <c>WW8Dop</c> default leaves.
+    /// </remarks>
+    public bool KeepsTableLinesOffTheGrid { get; init; }
+
     /// <summary>How the document's footnotes are numbered.</summary>
     /// <remarks>
     /// The DOP states the two classes in three different places: <c>nFootnote</c> and <c>nEdn</c> hold the
@@ -174,6 +205,14 @@ public readonly record struct Ww8DocumentProperties
             properties = properties with
             {
                 HasFacingPages = (BinaryPrimitives.ReadUInt16LittleEndian(dop) & 0x0001) != 0,
+            };
+        }
+
+        if (dop.Length >= AutoHyphenationOffset + 1)
+        {
+            properties = properties with
+            {
+                AutoHyphenation = (dop[AutoHyphenationOffset] & AutoHyphenationMask) != 0,
             };
         }
 
@@ -290,7 +329,14 @@ public readonly record struct Ww8DocumentProperties
         if (dop.Length >= CompatibilityOptions2Offset + 4)
         {
             uint options = BinaryPrimitives.ReadUInt32LittleEndian(dop[CompatibilityOptions2Offset..]);
-            properties = properties with { CollapsesSpacing = (options & 0x00000004) == 0 };
+            properties = properties with
+            {
+                CollapsesSpacing = (options & 0x00000004) == 0,
+
+                // fDontAdjustLineHeightInTable (`WW8Dop::SetCompatibilityOptions2`, `ww8scan.cxx`:7970),
+                // which `ww8par.cxx`:1969-1971 turns into ADJUST_TABLE_LINE_HEIGHTS_TO_GRID_HEIGHT.
+                KeepsTableLinesOffTheGrid = (options & 0x00000008) != 0,
+            };
         }
 
         return properties;
@@ -319,6 +365,12 @@ public readonly record struct Ww8DocumentProperties
             9 => Layout.NoteNumberFormat.Chicago,
             _ => fallback,
         };
+
+    /// <summary>Where <c>fAutoHyphen</c>'s byte sits in the <c>Dop</c>.</summary>
+    private const int AutoHyphenationOffset = 0x05;
+
+    /// <summary>Which bit of that byte it is.</summary>
+    private const int AutoHyphenationMask = 0x10;
 
     /// <summary>Where <c>fRMView</c>'s byte sits in the <c>Dop</c>.</summary>
     private const int RevisionViewOffset = 0x07;
