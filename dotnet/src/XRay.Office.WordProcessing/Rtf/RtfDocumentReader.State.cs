@@ -333,6 +333,12 @@ public sealed partial class RtfDocumentReader
         /// <summary>True when spacing between paragraphs of one style is suppressed.</summary>
         public bool HasContextualSpacing { get; set; }
 
+        /// <summary>
+        /// The paragraph-frame words so far: part of the group state as <c>RTFParserState::m_aFrame</c> is,
+        /// copied into a nested group and cleared by <c>\pard</c> (<c>rtfdispatchflag.cxx</c>:600).
+        /// </summary>
+        public RtfParagraphFrame Frame { get; set; }
+
         public GroupState Clone() => new()
         {
             Destination = Destination,
@@ -391,6 +397,7 @@ public sealed partial class RtfDocumentReader
             SuppressesHyphenation = SuppressesHyphenation,
             StartsNewPage = StartsNewPage,
             HasContextualSpacing = HasContextualSpacing,
+            Frame = Frame,
             // Deliberately not inherited: a nested group collects its own text, and the
             // stylesheet and font-table bookkeeping belongs to the entry that declared it.
         };
@@ -447,6 +454,7 @@ public sealed partial class RtfDocumentReader
             SuppressesHyphenation = false;
             StartsNewPage = false;
             HasContextualSpacing = false;
+            Frame = default;
         }
     }
 
@@ -1473,7 +1481,11 @@ public sealed partial class RtfDocumentReader
             state.AutoKerning,
             state.WidthPerCent,
             flow.LayoutAnchors.Count == 0 ? null : [.. flow.LayoutAnchors],
-            HeadingLevelOf(state) ?? 0);
+            HeadingLevelOf(state) ?? 0,
+
+            // writerfilter does not turn a paragraph inside a table into a frame
+            // (`CheckUnregisteredFrameConversion`, `DomainMapper_Impl.cxx`:2085-2097).
+            flow.InTable ? null : state.Frame.Request());
 
         if (cell is not null) cell.Add(new RtfLayoutBlock(recorded));
         else into!.Add(recorded);

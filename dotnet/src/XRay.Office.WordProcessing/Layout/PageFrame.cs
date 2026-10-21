@@ -742,6 +742,28 @@ public sealed record PageFrame
     public Length? HeightFloor { get; init; }
 
     /// <summary>
+    /// True when the frame's width is its text's rather than <see cref="DocSize.Width"/> of
+    /// <see cref="Size"/>, which then holds only the frame's padding.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Writer's <c>SwFrameSize::Minimum</c> width — a Word paragraph frame stating no <c>w:w</c>, which
+    /// writerfilter imports with <c>WidthType</c> <c>MIN</c> and width zero. <c>lcl_CalcAutoWidth</c>
+    /// (<c>sw/source/core/layout/fly.cxx</c>:3180-3257) takes each paragraph's
+    /// <c>CalcFitToContent</c> — its widest line laid out at the page's print-area width, plus one
+    /// twip and its indents — and, under <c>FRAME_AUTOWIDTH_WITH_MORE_PARA</c>, which the DOCX, RTF and
+    /// DOC importers all set, the width of the anchor's print area instead whenever the frame holds two
+    /// paragraphs or more, or one wider than that area (tdf#124423).
+    /// </para>
+    /// <para>
+    /// Measured on the 26.8 daily: a one-paragraph frame holding <c>FRAMEA short</c> is as wide as
+    /// those two words, and the same frame holding a second, longer paragraph is shaded across the
+    /// whole column.
+    /// </para>
+    /// </remarks>
+    public bool WidthFromContent { get; init; }
+
+    /// <summary>
     /// True when the frame is painted <em>behind</em> the document's text rather than over it.
     /// </summary>
     /// <remarks>

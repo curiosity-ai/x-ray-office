@@ -687,6 +687,55 @@ public static class FrameLayout
     }
 
     /// <summary>
+    /// A frame whose width is its text's, given the width of its anchor's print area.
+    /// </summary>
+    /// <remarks>
+    /// See <see cref="PageFrame.WidthFromContent"/>. One paragraph is laid out at the parent's width and
+    /// measured by its widest line's reach plus the paragraph's right indent and one twip
+    /// (<c>SwTextFrame::CalcFitToContent</c>, <c>sw/source/core/text/txtfrm.cxx</c>:3714); two or more take
+    /// the parent's width outright.
+    /// </remarks>
+    /// <param name="frame">The frame, whose <see cref="PageFrame.Size"/> width is its padding alone.</param>
+    /// <param name="parentWidth">The anchor's print-area width.</param>
+    /// <param name="collapsesSpacing">See <see cref="FlowLayouter.LayOut"/>.</param>
+    /// <param name="addsCellLineSpacing">See <see cref="PaginationOptions.AddsCellLineSpacing"/>.</param>
+    public static PageFrame FittedWidth(
+        PageFrame frame, Length parentWidth, bool collapsesSpacing = false, bool addsCellLineSpacing = false)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        if (!frame.WidthFromContent || parentWidth <= Length.Zero) return frame;
+
+        Length padding = frame.Padding.Left + frame.Padding.Right;
+        Length content = parentWidth;
+
+        if (frame.Blocks.Count == 1 && frame.Blocks[0] is PageParagraph paragraph)
+        {
+            PlacedFlow? flow = FlowLayouter.LayOut(
+                frame.Blocks,
+                new DocRect(Length.Zero, Length.Zero, parentWidth, Length.Zero),
+                Length.Zero,
+                0,
+                collapsesSpacing,
+                addsCellLineSpacing);
+
+            Length widest = Length.Zero;
+            foreach (PlacedLine line in flow?.Lines ?? [])
+            {
+                widest = Length.Max(widest, line.Box.Left + line.Box.Width);
+            }
+
+            Length fit = widest + paragraph.Format.EndIndent + Length.FromTwips(1);
+            if (fit < parentWidth) content = fit;
+        }
+
+        return frame with
+        {
+            Size = new DocSize(content + padding, frame.Size.Height),
+            WidthFromContent = false,
+        };
+    }
+
+    /// <summary>
     /// The floor under every fly's print area: <c>MINFLY</c>, 23 twips
     /// (<c>sw/inc/swtypes.hxx</c>:59, <em>"Minimal size for FlyFrames"</em>).
     /// </summary>
@@ -818,12 +867,15 @@ internal sealed class FrameResolution
         // value are still two frames.
         Dictionary<PageFrame, PageFrame> grown = new(ReferenceEqualityComparer.Instance);
 
-        PageFrame Sized(PageFrame frame)
+        PageFrame Sized(PageFrame frame, Length parentWidth = default)
         {
-            if (!frame.GrowsToContent) return frame;
+            if (!frame.GrowsToContent && !frame.WidthFromContent) return frame;
             if (grown.TryGetValue(frame, out PageFrame? already)) return already;
 
-            PageFrame sized = FrameLayout.Grown(frame, collapsesSpacing, addsCellLineSpacing);
+            PageFrame sized = frame.WidthFromContent
+                ? FrameLayout.FittedWidth(frame, parentWidth, collapsesSpacing, addsCellLineSpacing)
+                : frame;
+            sized = FrameLayout.Grown(sized, collapsesSpacing, addsCellLineSpacing);
             grown[frame] = sized;
             return sized;
         }
@@ -850,7 +902,7 @@ internal sealed class FrameResolution
                 // paragraph, so it is done by the walk below.
                 if (stated.Anchor == FrameAnchor.AsCharacter) continue;
 
-                PageFrame frame = Sized(stated);
+                PageFrame frame = Sized(stated, origin.Width);
 
                 DocRect area = FrameLayout.Place(
                     frame,

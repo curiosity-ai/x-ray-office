@@ -817,3 +817,13 @@ about it except the page layout is deliberately plain, because the only question
 fills first — LibreOffice draws its first line at 319 pt on this A4 page, which is the right-hand column.
 Three formats and not four: **LibreOffice's RTF export drops the section direction entirely**, writing
 `\cols2` and no `\rtlsect`, so an RTF round trip has nothing left to read.
+
+`drop-cap.doc` is a three-line Word drop cap: a `W` in a drop-cap text frame (`sprmPDcs`) ahead of a
+paragraph of lorem ipsum, in Liberation Serif 12 pt on A4. Authored as DOCX `w:framePr w:dropCap="drop"`
+and written to WW8 by LibreOffice 26.8's own export, which states the letter at 57.5 pt and lowers it
+with `sprmCHpsPos`, as Word does. The 26.8 daily draws it at 57.8 pt on a baseline at 129.9 pt, with the
+first three lines starting at 126.6 pt.
+
+`character-position.doc` holds a run raised 3 pt and an 18 pt run lowered 4 pt by `sprmCHpsPos`, written
+the same way from a DOCX stating `w:position`. The 26.8 daily draws their baselines at 99.15 and 107.1 pt
+against the line's 102.6.

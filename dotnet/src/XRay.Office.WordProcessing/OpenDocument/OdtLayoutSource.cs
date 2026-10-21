@@ -168,6 +168,12 @@ public sealed partial class OdtLayoutSource
     private readonly bool _tabsRelativeToIndent;
 
     /// <summary>
+    /// Whether a drop cap's ink is measured from the baseline (the drop-cap punctuation rule); see
+    /// <see cref="DropCapPunctuation(XElement?)"/>.
+    /// </summary>
+    public bool DropCapPunctuationRule { get; init; } = true;
+
+    /// <summary>
     /// Whether a row's declared height carries its insets and its own top rule.
     /// </summary>
     /// <remarks>See <see cref="RowHeightsIncludeInsets"/>, which has the measurement.</remarks>
@@ -403,6 +409,49 @@ public sealed partial class OdtLayoutSource
     /// <param name="settings">The document's <c>office:settings</c>, or null.</param>
     internal static bool TabsRelativeToIndent(XElement? settings)
         => Setting(settings, "TabsRelativeToIndent") != "false";
+
+    /// <summary>Whether a drop cap's ink is measured from the baseline, as the document's settings say.</summary>
+    /// <remarks>
+    /// <para>
+    /// The rule (tdf#150200) is on for every document Writer creates (<c>mbDropCapPunctuation(true)</c>,
+    /// <c>DocumentSettingManager.cxx</c>:110) and LibreOffice writes it out, so a file whose configuration
+    /// settings lack the item predates it and is laid out the old way: <c>SwXMLImport</c> turns it off
+    /// when the item is absent (<c>sw/source/filter/xml/xmlimp.cxx</c>:1431-1432, 1638-1644).
+    /// </para>
+    /// <para>
+    /// That code runs only for a <c>config:config-item-set</c> whose <c>config:name</c> is the
+    /// <em>qualified</em> name <c>ooo:configuration-settings</c>, so the prefix has to resolve to the
+    /// OpenOffice.org namespace: a settings part that never declares <c>xmlns:ooo</c> is not configuration
+    /// at all and keeps the default. Measured on the 26.8 daily over one document's settings, bisected item
+    /// by item and then by its root element's declarations: with the declaration and without the item a
+    /// lone opening quotation mark drops at 150.9 pt, with the item at 57.0, and without the declaration at
+    /// 57.0 whatever the items say — flat and packaged alike.
+    /// </para>
+    /// </remarks>
+    /// <param name="settings">The document's <c>office:settings</c>, or null.</param>
+    internal static bool DropCapPunctuation(XElement? settings)
+    {
+        XElement? configuration = settings?
+            .Descendants(XName.Get("config-item-set", OdfNamespaces.Config))
+            .FirstOrDefault(IsConfigurationSettings);
+
+        return configuration is null
+               || configuration
+                   .Descendants(XName.Get("config-item", OdfNamespaces.Config))
+                   .FirstOrDefault(item =>
+                       item.Attribute(XName.Get("name", OdfNamespaces.Config))?.Value == "DropCapPunctuation")?
+                   .Value == "true";
+
+        static bool IsConfigurationSettings(XElement set)
+        {
+            string? name = set.Attribute(XName.Get("name", OdfNamespaces.Config))?.Value;
+            int colon = name?.IndexOf(':', StringComparison.Ordinal) ?? -1;
+            if (name is null || colon <= 0) return false;
+
+            return name[(colon + 1)..] == "configuration-settings"
+                   && set.GetNamespaceOfPrefix(name[..colon])?.NamespaceName == "http://openoffice.org/2004/office";
+        }
+    }
 
     /// <summary>One <c>config:config-item</c>'s value from a document's settings, or null when absent.</summary>
     /// <remarks>
@@ -1139,7 +1188,7 @@ public sealed partial class OdtLayoutSource
         // preserves are the ones the notes and frames above were recorded against.
         List<PageRun> runs = RunsOf(walker.Ranges, text, face);
 
-        return new PageParagraph
+        PageParagraph read = new()
         {
             SectionIndex = _sectionIndex,
             Text = CaseMapping.Apply(walker.Text, runs),
@@ -1163,6 +1212,41 @@ public sealed partial class OdtLayoutSource
             OutlineLevel = OutlineLevelOf(element),
             Source = element,
         };
+
+        return OdfParagraphFormats.DropCapOf(_styles, styleName) is { Lines: > 1 } drop
+            ? DropCaps.ApplyPrefix(
+                read, drop.Characters, drop.WholeWord, drop.Lines, drop.Distance, BreakWidth,
+                drop.StyleName is { Length: > 0 } dropStyle ? DropStyle(styleName, dropStyle) : null,
+                DropCapPunctuationRule)
+            : read;
+    }
+
+    /// <summary>The width paragraphs are broken at, which a drop cap's line count is decided at.</summary>
+    /// <remarks>The first master's text width, which is the only geometry this source is given.</remarks>
+    public Length BreakWidth { get; init; } = Length.FromTwips(9360);
+
+    /// <summary>
+    /// How a drop cap's <c>style:style-name</c> restyles the dropped letters: its face, size and colour
+    /// laid over the paragraph's, as <c>SwFont::SetDiffFnt</c> lays the character format over the
+    /// portion's font (<c>sw/source/core/text/txtdrop.cxx</c>:615-620).
+    /// </summary>
+    private Func<PageRun, PageRun> DropStyle(string? paragraphStyle, string textStyle)
+    {
+        OdfTextStyle style = Resolve(
+            [new OdfStyleReference(paragraphStyle, OdfStyleFamily.Paragraph),
+             new OdfStyleReference(textStyle, OdfStyleFamily.Text)]);
+        OpenTypeFace? face = Face(style);
+        FontReference? font = _references.GetValueOrDefault(style.FaceKey);
+
+        return run => face is null
+            ? run
+            : run with
+            {
+                Face = face,
+                Font = font,
+                EmSize = style.Size,
+                Colour = style.Colour ?? run.Colour,
+            };
     }
 
     /// <summary>

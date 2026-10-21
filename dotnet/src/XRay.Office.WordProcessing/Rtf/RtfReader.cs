@@ -193,6 +193,8 @@ public sealed class RtfDocument : IWordProcessingDocument, IPaginatedDocument
             blocks.AddRange(Convert(fonts, block));
         }
 
+        blocks = LiftParagraphFrames(blocks);
+
         PaginationOptions pagination = PaginationOptions.Word with
         {
             // RTF goes through writerfilter exactly as DOCX does and so takes the same
@@ -224,6 +226,20 @@ public sealed class RtfDocument : IWordProcessingDocument, IPaginatedDocument
                         section, Furniture(fonts, index), StatesOwnFurniture(index)))]),
             paginator.Blocks ?? blocks);
     }
+
+    /// <summary>The body's or a running head's paragraph frames, lifted out of the flow.</summary>
+    /// <remarks>
+    /// The same lifting DOCX gets, because writerfilter maps an RTF frame through the same
+    /// <c>w:framePr</c> (see <see cref="RtfParagraphFrame"/>) — with one difference:
+    /// <c>lcl_MoveBorderPropertiesToFrame</c> widens a fixed width by the border spacing only for DOCX
+    /// (<c>DomainMapper_Impl.cxx</c>:1834-1838, <em>"This is needed for RTF as well, but that requires other export/import fixes"</em>).
+    /// </remarks>
+    private List<PageBlock> LiftParagraphFrames(List<PageBlock> blocks)
+        => ParagraphFrames.Lift(
+            blocks,
+            paragraph => paragraph.Source is ParagraphFrameRequest request ? request : null,
+            widensForBorderSpacing: false,
+            Sections.Count > 0 ? Sections[0].Page.TextArea.Width : Core.Units.Length.FromTwips(9360));
 
     /// <summary>
     /// Turns a recorded table into the layout engine's own, or null when it has no usable grid.
@@ -347,7 +363,7 @@ public sealed class RtfDocument : IWordProcessingDocument, IPaginatedDocument
                 {
                     if (!from.TryGetValue((at, slot), out IReadOnlyList<RtfLayoutBlock>? stated)) continue;
 
-                    List<PageBlock> converted = Convert(fonts, stated);
+                    List<PageBlock> converted = LiftParagraphFrames(Convert(fonts, stated));
                     if (converted.Count > 0) into[slot] = converted;
                     break;
                 }
@@ -433,6 +449,9 @@ public sealed class RtfDocument : IWordProcessingDocument, IPaginatedDocument
                     .Where(anchor => anchor.Name.Length > 0)
                     .Select(anchor => new PageAnchor(anchor.Offset, anchor.Name))],
                 OutlineLevel = paragraph.OutlineLevel,
+
+                // Carried for `LiftParagraphFrames`, which is the only reader of it.
+                Source = paragraph.FrameRequest,
             });
         }
 

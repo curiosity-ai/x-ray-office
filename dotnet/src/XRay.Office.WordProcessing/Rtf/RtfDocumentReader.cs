@@ -439,6 +439,13 @@ public sealed partial class RtfDocumentReader
         // property and \pich is not a paragraph one, and both share their prefix with nothing else.
         if (HandlePictureWord(token)) return;
 
+        // The paragraph-frame words, which only ever set the group's frame state.
+        if (state.Frame.With(token.Name, token.Parameter, CurrentFlow.InTable) is { } frame)
+        {
+            state.Frame = frame;
+            return;
+        }
+
         // Inside a {\stylesheet} entry, remember that the entry mentioned this word at all. The
         // merge through \sbasedon needs "the style said nothing" kept apart from "the style said
         // the default", and RTF's toggles cannot express that in the group state alone.

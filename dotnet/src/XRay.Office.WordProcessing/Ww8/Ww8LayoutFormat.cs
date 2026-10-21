@@ -386,10 +386,19 @@ public readonly record struct Ww8LayoutFormat
     /// </summary>
     /// <remarks>
     /// Unresolved, as everywhere else: the rise is a fraction of the <em>face's</em> height, and this reader
-    /// has no faces. WW8's other spelling, <c>sprmCHpsPos</c>, states a half-point offset outright and is
-    /// not read yet — a document using one gets no shift rather than a wrong one.
+    /// has no faces. WW8's other spelling is <see cref="PositionHalfPoints"/>; whichever came last wins,
+    /// since both are <c>RES_CHRATR_ESCAPEMENT</c> to the importer.
     /// </remarks>
     public Layout.Escapement? Escapement { get; init; }
+
+    /// <summary>
+    /// The half-point offset <c>sprmCHpsPos</c> states, or null when the run states none.
+    /// </summary>
+    /// <remarks>
+    /// Kept as stated, because the escapement it becomes is a percentage of the run's own size, and the
+    /// size may be stated after it in the same exception.
+    /// </remarks>
+    public short? PositionHalfPoints { get; init; }
 
     /// <summary>
     /// Translates into the layout engine's own properties.
