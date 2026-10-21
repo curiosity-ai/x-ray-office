@@ -12,8 +12,9 @@ namespace XRay.Office.Ooxml.DrawingML;
 /// <para>
 /// LibreOffice reads the same one and no other. <c>EffectProperties::pushToPropMap</c>
 /// (<c>oox/source/drawingml/effectproperties.cxx:61-114</c>) walks the effect list and acts on
-/// <c>outerShdw</c> alone; <c>innerShdw</c>, <c>reflection</c>, <c>softEdge</c> and the rest are
-/// parsed and dropped. Matching that is deliberate — the reference renderer is what a corpus
+/// <c>outerShdw</c> alone; <c>innerShdw</c>, <c>reflection</c> and the rest are parsed and dropped.
+/// The glow and the soft edge are the exception, set on the shape outside that walk — see
+/// <see cref="Glow"/>. Matching that is deliberate — the reference renderer is what a corpus
 /// comparison is measured against, and an effect it does not draw is one we must not draw either.
 /// </para>
 /// <para>
@@ -70,6 +71,37 @@ public static class DrawingEffects
             paint.A / 255.0,
             Length.FromEmu(Drawing.Number(shadow, "blurRad") ?? 0));
     }
+
+    /// <summary>
+    /// The glow an effect list states — its colour, the alpha the glow's opacity, and its radius —
+    /// or null when it states none.
+    /// </summary>
+    /// <remarks>
+    /// Not part of <c>pushToPropMap</c>: <c>Shape::createAndInsert</c> sets it on the shape
+    /// itself, the radius in hundredths of a millimetre and the colour's alpha as its transparency
+    /// (<c>oox/source/drawingml/shape.cxx</c>:2313-2321), and on any shape but a group.
+    /// </remarks>
+    public static (Colour Colour, Length Radius)? Glow(XElement? effects, DrawingTheme? theme)
+    {
+        if (Drawing.Child(effects, "glow") is not { } glow) return null;
+        if (Drawing.Number(glow, "rad") is not { } radius || radius <= 0) return null;
+
+        Colour colour = Colour.Black;
+        foreach (XElement child in glow.Elements())
+        {
+            if (DrawingColour.Read(child)?.Resolve(theme) is not { } resolved) continue;
+            colour = resolved;
+            break;
+        }
+
+        return (colour, Length.FromEmu(radius));
+    }
+
+    /// <summary>The soft edge an effect list states, or null when it states none (<c>shape.cxx</c>:2323-2329).</summary>
+    public static Length? SoftEdge(XElement? effects)
+        => Drawing.Number(Drawing.Child(effects, "softEdge"), "rad") is { } radius && radius > 0
+            ? Length.FromEmu(radius)
+            : null;
 
     /// <summary>
     /// The effect list a shape's <c>p:style</c> names in the theme's format scheme, or null.

@@ -55,26 +55,50 @@ public static class SlideDrawing
 
     private static void DrawShape(PlacedShape shape, DocSize page, IDrawingSink sink)
     {
-        if (shape.Shadow is { } shadow) DrawShadow(shape, shadow, sink);
+        void Geometry(IDrawingSink target) => DrawGeometry(shape, target);
+
+        // The effects are computed once and drawn twice when the shape casts a shadow, because the
+        // shadow wraps them: `createEmbeddedShadowPrimitive` is applied to the custom shape's whole
+        // decomposition, softened geometry, glow and text glow included
+        // (sdrcustomshapeprimitive2d.cxx:39-96; tdf#132199 put the glow inside it on purpose).
+        IReadOnlyList<EffectLayer> glow = shape.Glow is { } stated
+            ? SlideEffects.Glow(shape, stated, page, sink, Geometry)
+            : [];
+        EffectLayer? softened = shape.SoftEdge is { } softEdge
+            ? SlideEffects.SoftEdge(shape, softEdge, page, sink, Geometry)
+            : null;
+        IReadOnlyList<EffectLayer> textGlow = shape.TextGlow is { } halo && shape.Text is { Runs.Count: > 0 } glowing
+            ? SlideEffects.TextGlow(glowing, halo, page, sink, target => DrawText(glowing, target))
+            : [];
+
+        if (shape.Shadow is { } shadow) DrawShadow(shape, shadow, new Effects(glow, softened, textGlow), sink);
 
         // The glow goes under the shape and over its shadow: `createEmbeddedGlowPrimitive` puts
-        // the glow first and the content second, and the shadow is added round both
-        // (sdrcustomshapeprimitive2d.cxx:47-52, 80-96). The shadow of the glow itself is not
-        // drawn here.
-        if (shape.Glow is { } glow)
-        {
-            foreach (SlideEffects.Layer layer in SlideEffects.Glow(shape, glow, page))
-                sink.DrawImage(layer.Image, layer.Destination);
-        }
+        // the glow first and the content second.
+        foreach (EffectLayer layer in glow) sink.DrawImage(layer.Image, layer.Destination);
 
-        // A soft edge replaces the fill with its softened bitmap; the text is drawn over it as
-        // before, because the effect is applied ahead of the text (:39-45).
-        if (shape.SoftEdge is { } softEdge
-            && SlideEffects.SoftEdge(shape, softEdge, page) is { } softened)
-        {
-            sink.DrawImage(softened.Image, softened.Destination);
-        }
-        else if (shape.Fill is { } fill && FillReachesThePage(shape.Picture))
+        // A soft edge replaces the fill, the picture and the outline with its softened bitmap; the
+        // text is drawn over it as before, because the effect is applied ahead of the text (:39-45).
+        if (softened is { } bitmap) sink.DrawImage(bitmap.Image, bitmap.Destination);
+        else Geometry(sink);
+
+        // The text's own glow goes under the text and over the shape: `createEmbeddedTextGlowPrimitive`
+        // wraps the text primitive alone and the result is appended after the geometry (:55-75).
+        foreach (EffectLayer layer in textGlow) sink.DrawImage(layer.Image, layer.Destination);
+
+        if (shape.Text is not { HasInk: true } text) return;
+
+        DrawText(text, sink);
+    }
+
+    /// <summary>What a shape's effects drew, for its shadow to cast again.</summary>
+    private readonly record struct Effects(
+        IReadOnlyList<EffectLayer> Glow, EffectLayer? Softened, IReadOnlyList<EffectLayer> TextGlow);
+
+    /// <summary>A shape's fill, shading faces, picture and outline — everything but its text.</summary>
+    private static void DrawGeometry(PlacedShape shape, IDrawingSink sink)
+    {
+        if (shape.Fill is { } fill && FillReachesThePage(shape.Picture))
         {
             Fill(shape.FillOutline, fill, sink);
 
@@ -87,9 +111,11 @@ public static class SlideDrawing
 
         if (shape.Picture is { } picture) DrawPicture(shape, picture, sink);
         if (shape.Line is { } line) sink.StrokePath(shape.StrokeOutline, line);
+    }
 
-        if (shape.Text is not { HasInk: true } text) return;
-
+    /// <summary>A shape's text and its picture bullets.</summary>
+    private static void DrawText(PlacedText text, IDrawingSink sink)
+    {
         // An upright shape's runs are already in slide coordinates, so the common case costs no
         // state-stack traffic at all — and, more usefully, its pens land in a backend's output as
         // plain numbers that compare directly against a reference renderer's.
@@ -265,16 +291,19 @@ public static class SlideDrawing
     /// opaque raster the silhouette and the frame are the same pixels.
     /// </para>
     /// </remarks>
-    private static void DrawShadow(PlacedShape shape, SlideShadow shadow, IDrawingSink sink)
+    private static void DrawShadow(PlacedShape shape, SlideShadow shadow, Effects effects, IDrawingSink sink)
     {
         if (shadow.IsInvisible) return;
 
-        bool silhouette = shape.Fill is not null && FillReachesThePage(shape.Picture);
-        bool picture = shape.Picture is { Vector: null, Image: not null, Destination.IsEmpty: false };
-        bool outline = shape.Line is not null;
+        // A softened shape casts its softened bitmap, which stands in for all three.
+        bool softened = effects.Softened is not null;
+        bool silhouette = !softened && shape.Fill is not null && FillReachesThePage(shape.Picture);
+        bool picture = !softened && shape.Picture is { Vector: null, Image: not null, Destination.IsEmpty: false };
+        bool outline = !softened && shape.Line is not null;
         bool text = shadow.CarriesText && shape.Text is { Runs.Count: > 0 };
+        bool glow = effects.Glow.Count > 0;
 
-        if (!silhouette && !picture && !outline && !text) return;
+        if (!silhouette && !picture && !outline && !text && !glow && !softened) return;
 
         Paint paint = Paint.Solid(shadow.Colour);
         bool grouped = shadow.Opacity < 1.0;
@@ -287,6 +316,13 @@ public static class SlideDrawing
 
             try
             {
+                // The glow is inside the shadow, in the order the shape draws it: under the rest.
+                foreach (EffectLayer layer in effects.Glow)
+                    sink.DrawImage(ShapeEffects.Recoloured(layer.Image, shadow.Colour), layer.Destination);
+
+                if (effects.Softened is { } bitmap)
+                    sink.DrawImage(ShapeEffects.Recoloured(bitmap.Image, shadow.Colour), bitmap.Destination);
+
                 if (silhouette)
                 {
                     Paint silhouettePaint =
@@ -304,12 +340,18 @@ public static class SlideDrawing
 
                 if (picture) DrawPictureSilhouette(shape, shape.Picture!, shadow.Colour, sink);
 
-                if (shape.Line is { } line)
+                if (outline && shape.Line is { } line)
                 {
                     sink.StrokePath(shape.StrokeOutline, line with { Paint = Recoloured(line.Paint, shadow.Colour) });
                 }
 
-                if (text) DrawShadowText(shape.Text!, paint, sink);
+                if (text)
+                {
+                    foreach (EffectLayer layer in effects.TextGlow)
+                        sink.DrawImage(ShapeEffects.Recoloured(layer.Image, shadow.Colour), layer.Destination);
+
+                    DrawShadowText(shape.Text!, paint, sink);
+                }
             }
             finally
             {

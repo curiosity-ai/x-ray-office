@@ -381,30 +381,17 @@ public static class PageDrawing
 
         (GraphicsPath? filled, GraphicsPath? stroked) = Outlines(frame);
 
-        Turned(sink, shape);
+        // A glow under the shape, and a soft edge in place of its fill, picture and border. See
+        // `FrameEffects`.
+        bool softened = FrameEffects.Draw(
+            frame, filled, stroked, shape, sink,
+            target =>
+            {
+                DrawInk(frame, filled, shape, target);
+                DrawFrameBorder(frame, stroked, shape, target);
+            });
 
-        // A gradient before a colour, because the two are never both set and a gradient is the
-        // one that needs the placed rectangle: it is carried unplaced on the frame and becomes a
-        // paint here, against the area the layout engine settled on.
-        if (frame.Frame.Gradient is { } ramp)
-        {
-            GradientPaint paint = ramp.Paint(frame.Ink);
-            if (filled is null) Fill(frame.Ink, paint, sink);
-            else sink.FillPath(filled, paint);
-        }
-        else if (frame.Frame.Fill is { } fill)
-        {
-            if (filled is null) Fill(frame.Ink, fill, sink);
-            else sink.FillPath(filled, Paint.Solid(fill));
-        }
-
-        if (frame.Frame.Chart is { } chart)
-            FrameChart.Draw(sink, chart, frame.Ink, frame.Frame.ChartFontFamily);
-        else if (frame.Frame.Vector is { } vector && !vector.Value.IsEmpty)
-            DrawPicture(sink, frame, filled, vector, null);
-        else if (frame.Frame.Image is { } image) DrawPicture(sink, frame, filled, null, image);
-
-        Upright(sink, shape);
+        if (!softened) DrawInk(frame, filled, shape, sink);
 
         // The frame's own fill *is* the background an automatic font colour resolves against, and the
         // reason it was not, for four rounds, is that the two witnesses against it were misread.
@@ -470,6 +457,41 @@ public static class PageDrawing
             if (clips) sink.Restore();
         }
 
+        if (!softened) DrawFrameBorder(frame, stroked, shape, sink);
+    }
+
+    /// <summary>A frame's fill and its picture or chart, in its turned space.</summary>
+    private static void DrawInk(PlacedFrame frame, GraphicsPath? filled, AffineTransform? shape, IDrawingSink sink)
+    {
+        Turned(sink, shape);
+
+        // A gradient before a colour, because the two are never both set and a gradient is the
+        // one that needs the placed rectangle: it is carried unplaced on the frame and becomes a
+        // paint here, against the area the layout engine settled on.
+        if (frame.Frame.Gradient is { } ramp)
+        {
+            GradientPaint paint = ramp.Paint(frame.Ink);
+            if (filled is null) Fill(frame.Ink, paint, sink);
+            else sink.FillPath(filled, paint);
+        }
+        else if (frame.Frame.Fill is { } fill)
+        {
+            if (filled is null) Fill(frame.Ink, fill, sink);
+            else sink.FillPath(filled, Paint.Solid(fill));
+        }
+
+        if (frame.Frame.Chart is { } chart)
+            FrameChart.Draw(sink, chart, frame.Ink, frame.Frame.ChartFontFamily);
+        else if (frame.Frame.Vector is { } vector && !vector.Value.IsEmpty)
+            DrawPicture(sink, frame, filled, vector, null);
+        else if (frame.Frame.Image is { } image) DrawPicture(sink, frame, filled, null, image);
+
+        Upright(sink, shape);
+    }
+
+    /// <summary>A frame's border, in its turned space.</summary>
+    private static void DrawFrameBorder(PlacedFrame frame, GraphicsPath? stroked, AffineTransform? shape, IDrawingSink sink)
+    {
         if (frame.Frame.BorderColour is not { } colour) return;
         if (frame.Frame.BorderWidth <= Length.Zero) return;
 

@@ -626,8 +626,76 @@ internal sealed partial class OdpSlideLayout
             Line = Line(cascade),
             Text = Text(element, geometry, outline.TextRectangle, placement, cascade, fields),
             Shadow = Shadow(cascade),
+            Glow = Glow(element, cascade),
+            SoftEdge = SoftEdge(element, cascade),
+            TextGlow = TextGlow(cascade),
         };
     }
+
+    /// <summary>
+    /// A shape's glow: <c>loext:glow-radius</c>, <c>-color</c> and <c>-transparency</c>, which is
+    /// what <c>SdrGlowAttribute</c> is written out as (<c>xmloff/source/draw/sdpropls.cxx</c>:171-174).
+    /// </summary>
+    /// <remarks>
+    /// The transparency becomes the colour's alpha as <c>createNewSdrGlowAttribute</c> makes it,
+    /// <c>255 − round(t / 100 · 255)</c> (<c>sdrattributecreator.cxx</c>:195-210). A
+    /// rectangle <c>draw:custom-shape</c> takes it twice, for the reason <see cref="SlideGlow.Twice"/> gives;
+    /// measured on LibreOffice's own <c>--convert-to odp</c> of <c>slide-glow-soft-edge.pptx</c>,
+    /// whose PDF is image for image the one the PPTX gives.
+    /// </remarks>
+    private SlideGlow? Glow(XElement element, IReadOnlyList<OdfStyleReference> cascade)
+    {
+        if (Graphic(cascade, OdfNamespaces.LoExt, "glow-radius").AsLength() is not { } radius
+            || radius <= Core.Units.Length.Zero) return null;
+
+        Colour colour = Graphic(cascade, OdfNamespaces.LoExt, "glow-color").AsColour() ?? Colour.Black;
+        double transparency = Graphic(cascade, OdfNamespaces.LoExt, "glow-transparency").AsPercentage() ?? 0;
+
+        return new SlideGlow(colour.WithAlpha(Alpha(transparency)), radius, EffectsApplyTwice(element));
+    }
+
+    /// <summary>A shape's soft edge: <c>loext:softedge-radius</c> (<c>sdpropls.cxx</c>:177).</summary>
+    private SlideSoftEdge? SoftEdge(XElement element, IReadOnlyList<OdfStyleReference> cascade)
+    {
+        if (Graphic(cascade, OdfNamespaces.LoExt, "softedge-radius").AsLength() is not { } radius
+            || radius <= Core.Units.Length.Zero) return null;
+
+        return new SlideSoftEdge(radius, EffectsApplyTwice(element));
+    }
+
+    /// <summary>
+    /// Whether the effects are applied twice: on a rectangle <c>draw:custom-shape</c> only, whose
+    /// engine renders it from an <c>SdrRectObj</c> carrying the same effects — see
+    /// <c>PptxSlideLayout.EffectsApplyTwice</c> for the source and the measurement.
+    /// </summary>
+    private static bool EffectsApplyTwice(XElement element)
+        => element.Name.LocalName == "custom-shape"
+           && Attribute(element.Element(XName.Get("enhanced-geometry", OdfNamespaces.Draw)), OdfNamespaces.Draw, "type")
+               is "rectangle" or "ooxml-rect";
+
+    /// <summary>
+    /// The glow round a shape's text: <c>loext:glow-text-*</c>, which are text properties of the
+    /// graphic style (<c>sdpropls.cxx</c>:179-182), and the style's own font size, which the
+    /// radius is scaled against together with the runs'.
+    /// </summary>
+    private SlideTextGlow? TextGlow(IReadOnlyList<OdfStyleReference> cascade)
+    {
+        OdfProperty Text(string ns, string name)
+            => _file.Styles.ResolveProperty(cascade, OdfPropertyKind.Text, ns, name);
+
+        if (Text(OdfNamespaces.LoExt, "glow-text-radius").AsLength() is not { } radius
+            || radius <= Core.Units.Length.Zero) return null;
+
+        Colour colour = Text(OdfNamespaces.LoExt, "glow-text-color").AsColour() ?? Colour.Black;
+        double transparency = Text(OdfNamespaces.LoExt, "glow-text-transparency").AsPercentage() ?? 0;
+        Core.Units.Length size = Text(OdfNamespaces.FoCompatible, "font-size").AsLength()
+                                 ?? Core.Units.Length.FromPoints(18);
+
+        return new SlideTextGlow(colour.WithAlpha(Alpha(transparency)), radius, size);
+    }
+
+    private static byte Alpha(double transparency)
+        => (byte)(255 - Math.Round(Math.Clamp(Math.Round(transparency * 100), 0, 100) / 100.0 * 255.0));
 
     /// <summary>
     /// The warped glyph outlines of a shape in text-path mode, in the shape's own coordinates.

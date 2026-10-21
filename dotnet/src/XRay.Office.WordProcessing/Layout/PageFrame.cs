@@ -844,6 +844,12 @@ public sealed record PageFrame
     /// </remarks>
     public string? Preset { get; init; }
 
+    /// <summary>The glow around the shape, or null when it has none. See <see cref="ShapeEffects"/>.</summary>
+    public ShapeGlow? Glow { get; init; }
+
+    /// <summary>The soft edge the shape fades out over, or null when it has none.</summary>
+    public ShapeSoftEdge? SoftEdge { get; init; }
+
     /// <summary>
     /// The path the shape states outright, in its own coordinates with the origin at its top left,
     /// or null when it states a preset or nothing.

@@ -62,6 +62,10 @@ internal sealed class SkiaDrawingSink : IDrawingSink, IDisposable
     public OversizedImagePolicy OversizedImages { get; set; }
 
     /// <inheritdoc/>
+    public RasterImage? Rasterise(int width, int height, DocRect area, Action<IDrawingSink> draw)
+        => OffscreenRaster.Render(width, height, area, draw);
+
+    /// <inheritdoc/>
     public void BeginPage(DocSize size) => _canvas.Save();
 
     /// <inheritdoc/>
