@@ -450,8 +450,8 @@ public sealed record PageParagraph : PageBlock
     /// </para>
     /// <para>
     /// Set by the DOCX reader for a document stating <c>w:compat/w:ulTrailSpace</c>, which is
-    /// <c>MS_WORD_UL_TRAIL_SPACE</c>. Native ODF, whose trailing blanks Writer keeps by default, wants it
-    /// too and is not set here.
+    /// <c>MS_WORD_UL_TRAIL_SPACE</c>, and by the ODT reader from the two settings that spell the same pair
+    /// (<c>OdtLayoutSource.DecoratesTrailingBlank</c>), which a native ODF document leaves at decorating.
     /// </para>
     /// </remarks>
     public bool DecoratesTrailingBlank { get; init; }
