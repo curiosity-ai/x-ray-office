@@ -1892,55 +1892,42 @@ internal static class SheetTextLayout
     // ---------------------------------------------------------------------------- placement
 
     /// <summary>
-    /// The width a centred line is placed by, which is not always the width it draws.
+    /// The width a centred line is placed by, which is not always the width it draws: its width
+    /// without its trailing blanks.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <strong>A centred line whose trailing blanks overflow the room it was broken against
-    /// starts left of the cell, and the cell's clip then takes the word that begins it.</strong>
-    /// Measured on <c>Infotabelle_WLAN im Flugzeug.xlsx</c> page 2, a centred wrapping cell whose
-    /// runs of spaces stand in for tab stops: line two carried 46 trailing spaces worth 151 pt of
-    /// a 436 pt line against 283 pt of room, so it was placed at x = −25.2 pt in a cell clipped
-    /// from 50.4 pt, and the bold word <c>kostenlos</c> was drawn entirely outside it. The word is
-    /// in the file, in <c>xray-office extract</c>, in the wrapped line's range and in the shaped
-    /// run; the placement alone lost it, and the PDF held <c>kostenlos</c> five times against the
-    /// reference's six.
-    /// </para>
-    /// <para>
-    /// EditEngine never reaches a negative offset here, and the reason is structural rather than a
-    /// clamp: it keeps only as many trailing blanks as <em>fit</em>, so a wrapped line's width is
-    /// at most the width it was broken against and <c>(nMaxLineWidth - nCenterWidth) / 2</c>
-    /// cannot go below nought (<c>ImpEditEngine::CreateLines</c>,
-    /// <c>editeng/source/editeng/impedit3.cxx:1643-1683</c>). We keep every blank up to the next
-    /// word instead — see <see cref="Wrap"/>, which takes a line to its <c>End</c> because Calc
-    /// draws a line's trailing spaces — so the invariant has to be restored here.
-    /// </para>
-    /// <para>
-    /// Hence the two bounds, and neither alone is right:
+    /// <strong>The 26.8 branch centres a wrapped line on its visible text.</strong>
+    /// <c>ImpEditEngine::CreateLines</c> subtracts the line's trailing U+0020 from the centring width
+    /// before <c>(nMaxLineWidth - nCenterWidth) / 2</c> (<c>tdf#168135</c>, "exclude trailing spaces
+    /// from centering width", <c>editeng/source/editeng/impedit3.cxx</c>:1646-1682). It is in
+    /// 26.8.1.1 and the daily and not in 26.2.4.2, and it applies whether or not the line fits.
+    /// Measured on <c>sheet-centred-wrap-blanks.fods</c> and a one-attribute variant of it, against
+    /// the daily (2026-10-21):
     /// </para>
     /// <list type="bullet">
     /// <item><description>
-    /// A line that fits keeps its full width, blanks included, because the reference keeps the
-    /// blanks that fit. Nothing about a cell that was already right moves.
+    /// <c>WESTERLY</c> and two blanks, a line that fits: 26.2.4.2 drew it at 197.858 pt, centred
+    /// with its blanks; the daily at <b>199.247</b>, centred without them.
     /// </description></item>
     /// <item><description>
-    /// A line that overflows is placed by at most the room it had, which is the reference's
-    /// filled line: it starts at the left margin. That is where the reference puts both of the
-    /// two lines measured — 52.044 pt and 52.611 pt — and where this now puts them, at 51.392 pt.
-    /// The remaining 0.7 pt is the cell margin, and it is the same on every cell in the file.
-    /// </description></item>
-    /// <item><description>
-    /// But never by less than its own visible width, or a centred word longer than its column
-    /// would be pushed flush left instead of overflowing evenly. The reference does let that one
-    /// hang out both sides, since there is no blank in it for the first rule to have caught.
+    /// <c>WESTERLY</c> and 21 blanks, a line whose blanks overflow its 110 pt: 26.2.4.2 drew it at
+    /// its left margin, 171.468 pt, because its line was full; the daily at <b>199.247</b> again,
+    /// and the 23 blanks EditEngine carries to the next line at that line's centre, 226.743.
     /// </description></item>
     /// </list>
     /// <para>
-    /// <strong>What this does not fix</strong> is where the overflowing blanks end up. The
-    /// reference carries them onto the <em>next</em> line as leading blanks; we drop them at the
-    /// break. So the third line of that cell is still centred on its visible text alone, at
-    /// 129.9 pt against the reference's 205.9 pt. That is a line-breaking difference in
-    /// <see cref="Wrap"/> and is left alone here.
+    /// So the two bounds this used to apply — the full width for a line that fits, at most the room
+    /// for one that overflows — were 26.2.4.2's, and both are gone. The visible width cannot go
+    /// negative against the room a line was broken against unless a single word is wider than the
+    /// cell, and then the reference lets it hang out both sides too. The overflowing case is what
+    /// lost a bold <c>kostenlos</c> on <c>Infotabelle_WLAN im Flugzeug.xlsx</c> when a line with 151 pt
+    /// of trailing blanks was centred on all of them; centring on the visible text keeps it in the
+    /// cell for the same reason.
+    /// </para>
+    /// <para>
+    /// Only a line that was broken, because only a wrapping cell is laid out by EditEngine against a
+    /// paper here; a cell that does not wrap keeps its plain width, as it always has.
     /// </para>
     /// </remarks>
     /// <param name="horizontal">The resolved alignment; only centring is affected.</param>
@@ -1949,14 +1936,9 @@ internal static class SheetTextLayout
     private static Length AlignedWidth(
         SheetHorizontalAlignment horizontal, SheetTextRun line, Length available)
     {
-        if (horizontal != SheetHorizontalAlignment.Centre
-            || available <= Length.Zero
-            || line.Width <= available)
-        {
-            return line.Width;
-        }
+        if (horizontal != SheetHorizontalAlignment.Centre || available <= Length.Zero) return line.Width;
 
-        return Length.Max(line.WithoutTrailingBlanks, available);
+        return line.WithoutTrailingBlanks;
     }
 
     /// <summary>Where a line starts, given its width and the cell's.</summary>

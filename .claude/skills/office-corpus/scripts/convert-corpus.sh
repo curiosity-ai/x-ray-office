@@ -15,7 +15,8 @@
 # and `ref-baseline.sh` glob it unchanged.
 set -uo pipefail
 
-SOFFICE="${SOFFICE:-/opt/libreoffice26.2/program/soffice}"
+# The target reference: the 26.8 branch daily, standing in for the unpublished 26.8.2.
+SOFFICE="${SOFFICE:-/opt/libreofficedev26.8/program/soffice}"
 corpus="${1:?usage: convert-corpus.sh CORPUS OUTDIR [FAMILY_REGEX] [WORKERS]}"
 outdir="${2:?usage: convert-corpus.sh CORPUS OUTDIR [FAMILY_REGEX] [WORKERS]}"
 # A regex matched against MANIFEST.tsv's family column, not a shell glob: "." is all

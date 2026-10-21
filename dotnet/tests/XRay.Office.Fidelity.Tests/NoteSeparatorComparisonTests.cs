@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.RegularExpressions;
 using XRay.Office.Core.Documents;
 using XRay.Office.Rendering.Pdf;
 using XRay.Office.TestKit;
@@ -65,27 +67,41 @@ public sealed class NoteSeparatorComparisonTests : IDisposable
     /// LibreOffice sets the RTF notes in a face the file does not name, and only the RTF ones.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The evidence rather than the consequence, and the cheapest form of it: a PDF names the font
-    /// resource each run is drawn with, so "the notes are in a different face from the body" is a
-    /// comparison of two strings within one file and needs no font matching at all.
+    /// each run is drawn with, so "the notes are in a different face from the body" is a comparison of
+    /// two strings within one file and needs no font matching at all.
+    /// </para>
+    /// <para>
+    /// <strong>By the font's <c>/BaseFont</c>, not by its resource name.</strong> 26.2.4.2 wrote one
+    /// font object per face, so the resource name was the face. The 26.8 branch daily
+    /// (<c>LibreOfficeDev 26.8.3.0.0</c>, measured 2026-10-21) writes one per face <em>and size</em>:
+    /// its PDF of <c>footnotes.fodt</c> draws the body, the notes and the citations at 11, 10 and 6.4 pt
+    /// through <c>F1</c>, <c>F3</c> and <c>F2</c>, all three <c>Carlito-Regular</c>, where 26.2.4.2's
+    /// draws all three through <c>F1</c>. 26.8.1.1 does the same as the daily. The faces are unchanged
+    /// — the RTF notes are still Liberation Serif beside a Carlito body in both — so only the
+    /// instrument had to move. The upstream commit was not located.
+    /// </para>
     /// </remarks>
     [Fact]
     public void LibreOfficeSetsTheRtfNotesInADifferentFaceFromTheBody()
     {
         Assert.SkipUnless(LibreOfficeRunner.IsAvailable, LibreOfficeRunner.UnavailableReason);
 
-        List<PdfTextRun> rtf = PdfTextRuns.Read(
-            _libreOffice.ConvertToPdf(Corpus.Require("footnotes.rtf"), _workDirectory));
-        List<PdfTextRun> odf = PdfTextRuns.Read(
-            _libreOffice.ConvertToPdf(Corpus.Require("footnotes.fodt"), _workDirectory));
+        string rtfPath = _libreOffice.ConvertToPdf(
+            Corpus.Require("footnotes.rtf"), Directory.CreateDirectory(Path.Combine(_workDirectory, "rtf")).FullName);
+        string odfPath = _libreOffice.ConvertToPdf(
+            Corpus.Require("footnotes.fodt"), Directory.CreateDirectory(Path.Combine(_workDirectory, "odf")).FullName);
+        List<PdfTextRun> rtf = PdfTextRuns.Read(rtfPath);
+        List<PdfTextRun> odf = PdfTextRuns.Read(odfPath);
 
-        FaceOfNotes(rtf).ShouldNotBe(
-            FaceOfBody(rtf),
+        BaseFont(rtfPath, FaceOfNotes(rtf)).ShouldNotBe(
+            BaseFont(rtfPath, FaceOfBody(rtf)),
             "LibreOffice's RTF rendering draws the notes in the face the file names after all, so the "
             + "separator difference this file exists to explain has some other cause");
 
-        FaceOfNotes(odf).ShouldBe(
-            FaceOfBody(odf),
+        BaseFont(odfPath, FaceOfNotes(odf)).ShouldBe(
+            BaseFont(odfPath, FaceOfBody(odf)),
             "LibreOffice's ODF rendering of the same document should set body and notes in one face");
     }
 
@@ -192,4 +208,28 @@ public sealed class NoteSeparatorComparisonTests : IDisposable
 
     private static string FaceOfBody(List<PdfTextRun> runs)
         => runs.First(run => run.FontSize > NoteSizePoints + 0.5).FontResource;
+
+    /// <summary>
+    /// The face a font resource names, with its subset tag removed, out of a PDF LibreOffice wrote.
+    /// </summary>
+    /// <remarks>
+    /// LibreOffice writes its resource dictionaries and font objects uncompressed, so two patterns find
+    /// them: <c>/F3 51 0 R</c> in a <c>/Font</c> dictionary, and object 51's <c>/BaseFont</c>.
+    /// </remarks>
+    private static string BaseFont(string pdfPath, string resource)
+    {
+        string text = Encoding.Latin1.GetString(File.ReadAllBytes(pdfPath));
+
+        Match reference = Regex.Match(text, $@"/{Regex.Escape(resource)}\s+(\d+)\s+0\s+R");
+        reference.Success.ShouldBeTrue($"{Path.GetFileName(pdfPath)}: no font resource {resource}");
+
+        Match font = Regex.Match(
+            text, $@"(?m)^{reference.Groups[1].Value}\s+0\s+obj\s*<<.*?/BaseFont\s*/([^/\s<>\[\]]+)",
+            RegexOptions.Singleline);
+        font.Success.ShouldBeTrue($"{Path.GetFileName(pdfPath)}: no font object for {resource}");
+
+        string name = font.Groups[1].Value;
+        int plus = name.IndexOf('+', StringComparison.Ordinal);
+        return plus == 6 ? name[7..] : name;
+    }
 }

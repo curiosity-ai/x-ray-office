@@ -84,11 +84,9 @@ internal sealed class SheetTextRun
     /// <para>
     /// EditEngine names the same quantity — <c>tdf#168135</c>, "exclude trailing spaces from
     /// centering width" (<c>ImpEditEngine::CreateLines</c>,
-    /// <c>editeng/source/editeng/impedit3.cxx:1646-1682</c>). It is only <em>one</em> of the two
-    /// bounds a centred line is placed by here, because our wrapped lines can overflow the width
-    /// they were broken against where EditEngine's cannot; see
-    /// <c>SheetTextLayout.AlignedWidth</c>, which is the sole caller and holds the arithmetic and
-    /// the measurements.
+    /// <c>editeng/source/editeng/impedit3.cxx:1646-1682</c>), and since the retarget to the 26.8
+    /// branch it is the whole of what a wrapped centred line is placed by; see
+    /// <c>SheetTextLayout.AlignedWidth</c>, which is the sole caller and holds the measurements.
     /// </para>
     /// <para>
     /// Only U+0020 counts, which is what EditEngine tests for. A no-break space is not a blank

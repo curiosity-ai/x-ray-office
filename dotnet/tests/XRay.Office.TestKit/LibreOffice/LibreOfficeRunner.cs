@@ -425,6 +425,10 @@ public sealed class LibreOfficeRunner : IDisposable
             CreateNoWindow = true,
         };
 
+        // The machine's fontconfig less the two additions this tree cannot see; see
+        // ReferenceFontconfig for what they are and what they cost.
+        if (ReferenceFontconfig.File is { } fontconfig) startInfo.Environment["FONTCONFIG_FILE"] = fontconfig;
+
         // The private profile has to come before everything else: soffice reads it while
         // parsing its arguments, and a shared profile is how two concurrent runs lose output.
         startInfo.ArgumentList.Add($"-env:UserInstallation=file://{_profileDirectory}");
@@ -460,6 +464,9 @@ public sealed class LibreOfficeRunner : IDisposable
             };
             startInfo.ArgumentList.Add(family);
             startInfo.ArgumentList.Add("family");
+
+            // Asked under the configuration the reference runs under, which is what it describes.
+            if (ReferenceFontconfig.File is { } fontconfig) startInfo.Environment["FONTCONFIG_FILE"] = fontconfig;
 
             using Process? process = Process.Start(startInfo);
             if (process is null) return string.Empty;

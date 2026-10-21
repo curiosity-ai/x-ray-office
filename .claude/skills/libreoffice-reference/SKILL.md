@@ -56,13 +56,19 @@ It checks four things, in order of how badly each will mislead you:
 
 ## Which soffice: `REF_SOFFICE`, and every script here honours it
 
-**This machine has two, they disagree, and PATH is the wrong one.** `/usr/bin/soffice` is
-**24.2.7.2**; the tree is calibrated to **26.2.4.2**, which is the TDF tarball at
-`/opt/libreoffice26.2/program/soffice`. Set the variable for anything whose number you intend
-to keep:
+**This machine has several, they disagree, and PATH is the wrong one.** `/usr/bin/soffice` is
+**24.2.7.2**. **Since 2026-10-21 the target is 26.8.2, represented by the 26.8 branch daily** at
+`/opt/libreofficedev26.8/program/soffice` (`LibreOfficeDev 26.8.3.0.0`), because 26.8.2 itself was
+never published. The tree was calibrated to **26.2.4.2** (`/opt/libreoffice26.2`) before that, and
+`/opt/libreoffice26.8` is 26.8.1.1; use those two only to explain a difference. Set the variable
+for anything whose number you intend to keep, and give the reference the stock font
+configuration (see `dotnet/CLAUDE.md`, *The reference is the 26.8 daily*):
 
 ```sh
-export REF_SOFFICE=/opt/libreoffice26.2/program/soffice
+export REF_SOFFICE=/opt/libreofficedev26.8/program/soffice
+# reference only: the configuration the fidelity harness generates (ReferenceFontconfig); run any
+# fidelity test once to create it
+export FONTCONFIG_FILE=$(ls -t ${TMPDIR:-/tmp}/xray-office-fontconfig-*/fonts.conf | head -1)
 ```
 
 Every script in this skill, in `render-comparison` and in `corpus-batches` now reads it and

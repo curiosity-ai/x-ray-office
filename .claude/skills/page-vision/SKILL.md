@@ -83,7 +83,7 @@ how to spend the next round.
 
 ```bash
 export XRAY_OFFICE_CLI=<the tree you mean to measure>/dotnet/tools/…/XRay.Office.Cli
-export REF_SOFFICE=/opt/libreoffice26.2/program/soffice   # PATH is 24.2.7.2; they disagree
+export REF_SOFFICE=/opt/libreofficedev26.8/program/soffice   # the target; PATH is 24.2.7.2
 .claude/skills/page-vision/scripts/pair.sh "<doc>__xlsx" --worst --outdir /abs/pairs
 ```
 
@@ -261,7 +261,8 @@ missing mark and a mark your instrument threw away look identical to the reader.
 
 **`look.py` renders the reference itself when the bank has no copy, so `REF_SOFFICE` decides
 which binary you are reading against.** It hard-coded PATH — 24.2.7.2 — until round 180, while
-the tree is calibrated to 26.2.4.2, and the two genuinely paginate real documents differently.
+the tree was calibrated to 26.2.4.2 (the 26.8 daily since 2026-10-21), and the two genuinely paginate
+real documents differently.
 It now prints the binary it resolved; read that line before reading the page.
 
 `pair.sh` chains `look.py` and `compose.py` so the two halves cannot be rendered at
