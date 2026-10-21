@@ -874,6 +874,14 @@ internal sealed class PdfContentSink(
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// The reference's PDF carries these effects as images too, so the pixels come from the raster
+    /// backend's renderer and are written here as an ordinary image by whoever asked for them.
+    /// </remarks>
+    public RasterImage? Rasterise(int width, int height, DocRect area, Action<IDrawingSink> draw)
+        => Raster.OffscreenRaster.Render(width, height, area, draw);
+
+    /// <inheritdoc/>
     public void BeginTransparencyGroup(double opacity)
     {
         _groups.Push(_content);

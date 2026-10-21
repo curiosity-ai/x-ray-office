@@ -198,6 +198,9 @@ public sealed record PlacedShape
     /// <summary>The soft edge it fades out over, or null when it has none.</summary>
     public SlideSoftEdge? SoftEdge { get; init; }
 
+    /// <summary>The glow round its text, or null when the text has none.</summary>
+    public SlideTextGlow? TextGlow { get; init; }
+
     private readonly GraphicsPath? _fillOutline;
     private readonly GraphicsPath? _strokeOutline;
 }
