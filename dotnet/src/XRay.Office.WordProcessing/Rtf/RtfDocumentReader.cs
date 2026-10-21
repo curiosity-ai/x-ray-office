@@ -163,6 +163,12 @@ public sealed partial class RtfDocumentReader
     /// </remarks>
     private int _defaultFontIndex;
 
+    /// <summary><c>\hyphauto</c>: every paragraph is hyphenated unless it says otherwise.</summary>
+    private bool _autoHyphenation;
+
+    /// <summary><c>\hyphcaps0</c>: a word in capitals is not hyphenated.</summary>
+    private bool _noHyphenateCaps;
+
     private int _colourRed;
     private int _colourGreen;
     private int _colourBlue;
@@ -370,16 +376,23 @@ public sealed partial class RtfDocumentReader
                     AppendText(state, char.ConvertFromUtf32(token.CodePoint));
                     // \uN is followed by however many fallback characters \uc says, which
                     // duplicate the same character in the document's code page. Emitting them
-                    // would double every non-ASCII character.
-                    SkipUnicodeFallback(tokeniser, state.UnicodeSkip);
+                    // would double every non-ASCII character. They are dropped as they arrive, by
+                    // count, rather than by reading ahead here: see SkipFallback.
+                    state.CharsToSkip = state.UnicodeSkip;
                     break;
 
                 case RtfTokenKind.EscapedByte:
+                    if (state.CharsToSkip > 0)
+                    {
+                        state.CharsToSkip--;
+                        break;
+                    }
                     AppendText(state, DecodeByte((byte)token.CodePoint, state));
                     break;
 
                 case RtfTokenKind.Text:
-                    AppendText(state, Decode(token.Bytes.Span, state));
+                    ReadOnlySpan<byte> text = SkipFallback(token.Bytes.Span, state);
+                    if (!text.IsEmpty) AppendText(state, Decode(text, state));
                     break;
 
                 case RtfTokenKind.Binary:
@@ -810,6 +823,19 @@ public sealed partial class RtfDocumentReader
             case "keep":
                 state.KeepTogether = token.Parameter is not 0;
                 return;
+            // Automatic hyphenation. `\hyphauto` and `\hyphcaps` are document settings
+            // (`rtfdocumentimpl.cxx`:2255-2261: autoHyphenation, and doNotHyphenateCaps for `\hyphcaps0`);
+            // `\hyphpar0` is a paragraph's suppressAutoHyphens (`:2262-2265`). `\hyphhotz` and
+            // `\hyphconsec` are tokenised and then dropped by writerfilter, so they are not read here either.
+            case "hyphauto":
+                _autoHyphenation = (token.Parameter ?? 1) != 0;
+                return;
+            case "hyphcaps":
+                _noHyphenateCaps = token.Parameter == 0;
+                return;
+            case "hyphpar":
+                state.SuppressesHyphenation = token.Parameter == 0;
+                return;
             case "widctlpar":
                 state.HasWidowControl = true;
                 return;
@@ -865,6 +891,7 @@ public sealed partial class RtfDocumentReader
                 // the font and the size where the previous run put them lets a `\f0\fs18` written
                 // for one empty table cell set the face of every cell after it.
                 state.FontIndex = _defaultFontIndex;
+                state.FontStated = false;
                 state.FontSizeHalfPoints = null;
 
                 // The paragraph style sits under the direct formatting rather than beside it, so
@@ -1000,6 +1027,7 @@ public sealed partial class RtfDocumentReader
                 return;
             case "f":
                 state.FontIndex = token.Parameter ?? 0;
+                state.FontStated = state.Destination != RtfDestination.FontTable;
                 if (state.Destination == RtfDestination.FontTable)
                     state.FontTableIndex = token.Parameter ?? 0;
                 return;
@@ -1149,25 +1177,33 @@ public sealed partial class RtfDocumentReader
                 DefinitionTarget(CurrentFlow).PendingBorderSide = 3;
                 return;
 
-            case "brdrw" or "brdrcf" or "brdrnone" or "brdrtbl":
+            case "brdrw" or "brdrcf":
             {
                 TableLevel target = DefinitionTarget(CurrentFlow);
                 if (target.PendingBorderSide is not { } at) return;
 
-                (int Twips, int? ColourIndex, bool IsNone) side = target.PendingCellBorders[at];
+                (int Twips, int? ColourIndex, int Style) side = target.PendingCellBorders[at];
 
-                target.PendingCellBorders[at] = token.Name switch
-                {
+                target.PendingCellBorders[at] = token.Name == "brdrw"
                     // \brdrw is in twips, unlike OOXML's eighths of a point and ODF's CSS shorthand: one
                     // quantity, three units, and reading any of them as another is out by a factor.
-                    "brdrw" => (Math.Max(0, token.Parameter ?? 0), side.ColourIndex, side.IsNone),
-                    "brdrcf" => (side.Twips, token.Parameter, side.IsNone),
+                    ? (Math.Max(0, token.Parameter ?? 0), side.ColourIndex, side.Style)
+                    : (side.Twips, token.Parameter, side.Style);
 
-                    // \brdrnone and \brdrtbl both mean "no border on this side", and both have to beat a
-                    // width stated before them: a producer writes the width and then cancels it.
-                    _ => (0, null, true),
-                };
+                return;
+            }
 
+            // The style words. Without one the side is no border at all, whatever width or colour it was
+            // given: writerfilter only sets `LN_CT_Border_val` from these (`rtfdispatchflag.cxx`:262-330),
+            // and dmapper's cell handler starts from style 0, none (`TDefTableHandler.cxx`:35). \brdrnone,
+            // \brdrnil and \brdrtbl are the style "none", and a later style word overrides them, as a later
+            // `val` does there.
+            case var name when RtfPageGeometry.StyleOf(name) is { } style
+                               && SelectedCellBorder(CurrentFlow) is { } selected:
+            {
+                TableLevel target = DefinitionTarget(CurrentFlow);
+                (int Twips, int? ColourIndex, int Style) side = target.PendingCellBorders[selected];
+                target.PendingCellBorders[selected] = (side.Twips, side.ColourIndex, style);
                 return;
             }
 
@@ -1469,37 +1505,43 @@ public sealed partial class RtfDocumentReader
     }
 
     /// <summary>
-    /// Consumes the code-page fallback characters that follow a <c>\uN</c>.
+    /// Drops what is left of a <c>\uN</c>'s code-page fallback from the front of a text token.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// A writer emits both a Unicode code point and its best approximation in the document's code
-    /// page, so that older readers see something. <c>\ucN</c> says how many characters the
-    /// approximation takes. Not skipping them doubles every non-ASCII character — with the
-    /// duplicate usually rendered as a question mark, which is what makes the symptom look like
-    /// an encoding bug rather than a parsing one.
+    /// page, so that older readers see something; <c>\ucN</c> says how many characters the
+    /// approximation takes. Not skipping them doubles every non-ASCII character.
+    /// </para>
+    /// <para>
+    /// The count is of characters, not of tokens. Pandoc writes a typographic apostrophe as
+    /// <c>\u8217'</c> followed directly by the rest of the word, so the fallback <c>'</c> and
+    /// <c>s swim!</c> arrive as one text token; skipping the whole token lost the rest of every
+    /// such run ("Let’" for "Let’s swim!"). This follows writerfilter's
+    /// <c>RTFDocumentImpl::resolveChars</c> (<c>sw/source/writerfilter/rtftok/rtfdocumentimpl.cxx</c>:1342-1395):
+    /// each literal byte and each <c>\'hh</c> escape counts one (a Shift-JIS lead byte takes its trail
+    /// byte with it), a newline counts nothing, and a control word neither counts nor ends the
+    /// skip — the count lives on in the group state until characters use it up, and a <c>\uN</c>
+    /// sets it afresh (<c>rtfdispatchvalue.cxx</c>:1113). Measured against 26.8.1.1 on a probe of eleven
+    /// shapes (<c>\uc0</c>..<c>\uc3</c>, a brace, <c>\b</c>, <c>\par</c> and a hex escape inside the
+    /// fallback); every one agrees.
+    /// </para>
     /// </remarks>
-    private static void SkipUnicodeFallback(RtfTokeniser tokeniser, int count)
+    private ReadOnlySpan<byte> SkipFallback(ReadOnlySpan<byte> bytes, GroupState state)
     {
-        for (int skipped = 0; skipped < count;)
+        if (state.CharsToSkip <= 0) return bytes;
+
+        bool shiftJis = EncodingFor(state).CodePage == 932;
+        int index = 0;
+        while (index < bytes.Length && state.CharsToSkip > 0)
         {
-            RtfToken token = tokeniser.Read();
-            switch (token.Kind)
-            {
-                case RtfTokenKind.End:
-                    return;
-                case RtfTokenKind.EscapedByte:
-                    skipped++;
-                    break;
-                case RtfTokenKind.Text:
-                    // A text token may cover several fallback characters at once.
-                    skipped += token.Bytes.Length;
-                    break;
-                default:
-                    // A group boundary or control word ends the fallback run: the approximation
-                    // is plain characters only.
-                    return;
-            }
+            byte current = bytes[index++];
+            if (shiftJis && (current is >= 0x80 and <= 0x9F || current >= 0xE0) && index < bytes.Length)
+                index++;
+            state.CharsToSkip--;
         }
+
+        return bytes[index..];
     }
 
     private void ReportDepthLimit()

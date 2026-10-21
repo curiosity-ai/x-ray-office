@@ -233,6 +233,14 @@ public sealed class RtfTokeniser
 
         // \binN: the next N bytes are data and not RTF. Read here rather than by the reader, because
         // the reader sees tokens and by then the damage is done — see RtfTokenKind.Binary.
+        //
+        // A \bin with no count is a deliberate deviation from LibreOffice. 26.8.1.1 enters binary state
+        // with a count of 0 (rtfdispatchvalue.cxx:1572-1576), and resolveChars then takes exactly one
+        // byte as the whole payload (rtfdocumentimpl.cxx:1316-1336), so a picture written
+        // `\jpegblip … \bin ffd8ffe0…` — hex after a countless \bin, as rtf/image.rtf in test_documents
+        // has it — is undecodable and the reference draws a blank page. Here the word stays an ordinary
+        // control word and the hex that follows is read as hex, so the picture the file plainly carries
+        // is drawn. Matching the reference would mean discarding it.
         if (name == "bin" && parameter is { } count)
         {
             int length = Math.Clamp(count, 0, _data.Length - _position);

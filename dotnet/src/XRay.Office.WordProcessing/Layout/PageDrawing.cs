@@ -1657,6 +1657,12 @@ public static class PageDrawing
         List<TabbedSegment> stretches =
             Stretches(paragraph, start, end, line.StartsParagraph, area.Width);
 
+        // The run the line's last glyphs came from and where the pen stood after it, for the hyphen a
+        // hyphenated line ends in.
+        PageRun? lastRun = null;
+        Length lastPen = lineLeft;
+        Colour lastColour = default;
+
         for (int index = 0; index < stretches.Count; index++)
         {
             TabbedSegment segment = stretches[index];
@@ -1750,6 +1756,31 @@ public static class PageDrawing
                 }
 
                 pen += extent;
+                lastRun = run;
+                lastPen = pen;
+                lastColour = run.ColourOn(background);
+            }
+        }
+
+        // Automatic hyphenation broke the line's last word: Writer's `SwHyphPortion` draws a hyphen in the
+        // font in force at the break, straight after the text, and the line's width the layout justified
+        // and aligned already includes it.
+        if (line.Box.Line.Hyphenated && lastRun is { } broken)
+        {
+            ShapedText hyphen = TextShaper.Default.Shape(broken.Face, "-", broken.EffectiveShaping);
+            if (hyphen.Glyphs.Count > 0)
+            {
+                runs.Add((
+                    Build(
+                        hyphen,
+                        "-",
+                        broken.EmSize,
+                        broken.Font ?? Reference(paragraph, broken.Face),
+                        new DocPoint(lastPen, baseline - broken.Rise),
+                        Length.Zero,
+                        broken.Tracking,
+                        broken.WidthScale),
+                    lastColour));
             }
         }
 

@@ -515,6 +515,17 @@ public sealed record ParagraphFormat
     public bool ShrinksJustifiedBlanks { get; init; }
 
     /// <summary>
+    /// The paragraph's automatic hyphenation, or null when it is not hyphenated — the default, and what
+    /// every format but a word processor's always is.
+    /// </summary>
+    /// <remarks>
+    /// Read by <see cref="LineFiller"/> for the word that runs past the margin, and only when the paragraph's
+    /// language has a pattern file (<see cref="Core.Globalization.Hyphenators.For"/>); a language without one
+    /// is laid out as though this were null, which is also what LibreOffice does with no dictionary.
+    /// </remarks>
+    public HyphenationRules? Hyphenation { get; init; }
+
+    /// <summary>
     /// Where the paragraph's tab stops are measured from, relative to the text area's start edge.
     /// </summary>
     public Length TabOrigin => TabsRelativeToIndent ? StartIndent : Length.Zero;

@@ -59,6 +59,9 @@ public sealed partial class DocxLayoutSource
     private readonly Length _defaultTabInterval;
     private readonly int _compatibilityMode;
 
+    /// <summary>The document's automatic hyphenation, or null when <c>w:autoHyphenation</c> is off.</summary>
+    private readonly HyphenationRules? _hyphenation;
+
     /// <summary>What <c>w:beforeAutospacing</c> and <c>w:afterAutospacing</c> stand for here.</summary>
     private readonly Length _autoSpacing;
 
@@ -148,6 +151,7 @@ public sealed partial class DocxLayoutSource
         _fonts = fonts ?? SystemFontResolver.Build();
         _defaultTabInterval = TabInterval(settings);
         _compatibilityMode = CompatibilityMode(settings);
+        _hyphenation = Hyphenation(settings);
         WordCompatibility compatibility = WordCompatibility.Read(settings);
         _autoSpacing = AutoSpacing(settings, compatibility);
         // `AsWordDocument` is the MS_WORD_COMP_GRID_METRICS compatibility flag, which the Word
@@ -912,7 +916,7 @@ public sealed partial class DocxLayoutSource
         ParagraphFormat format =
             WordParagraphFormats.Resolve(
                 _styles, properties, _defaultTabInterval, _autoSpacing, _tableStyle,
-                _compatibilityMode >= 15);
+                _compatibilityMode >= 15, _hyphenation);
 
         // After the walk, because reading a note body or a text box re-enters this method and a list
         // counter advanced from inside a nested flow would number the paragraph after it wrongly.
@@ -3064,23 +3068,69 @@ public sealed partial class DocxLayoutSource
     /// </para>
     /// </remarks>
     private static int CompatibilityMode(XElement? settings)
+        => CompatSetting(settings, "compatibilityMode") is { } text
+           && int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int mode)
+            ? mode
+            : -1;
+
+    /// <summary>
+    /// The document's automatic hyphenation, as writerfilter puts it on the default paragraph style.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>SettingsTable::ApplyProperties</c> (<c>sw/source/writerfilter/dmapper/SettingsTable.cxx</c>:750-786):
+    /// <c>w:autoHyphenation</c> turns <c>ParaIsHyphenation</c> on, <c>w:doNotHyphenateCaps</c> sets no-caps,
+    /// <c>w:hyphenationZone</c> the zone — 360 twips, Word's quarter inch, when the file states none
+    /// (<c>:103</c>) — and <c>w:consecutiveHyphenLimit</c> the most hyphenated lines in a row. Hyphenation-keep
+    /// with keep-line is on unless the <c>allowHyphenationAtTrackBottom</c> compatibility setting says
+    /// otherwise (<c>:591-606</c>); <c>useWord2013TrackBottomHyphenation</c> asks for the whole line to move
+    /// instead, which is not modelled, so that case keeps nothing.
+    /// </para>
+    /// <para>
+    /// A paragraph takes it unless its <c>w:suppressAutoHyphens</c> says otherwise — see
+    /// <see cref="WordParagraphFormats.Resolve"/>.
+    /// </para>
+    /// </remarks>
+    private static HyphenationRules? Hyphenation(XElement? settings)
+    {
+        if (!Word.IsOn(Word.Child(settings, "autoHyphenation"))) return null;
+
+        int zone = int.TryParse(
+            Word.Attribute(Word.Child(settings, "hyphenationZone"), "val"),
+            NumberStyles.Integer, CultureInfo.InvariantCulture, out int stated) && stated > 0
+            ? stated
+            : 360;
+        int consecutive = int.TryParse(
+            Word.Attribute(Word.Child(settings, "consecutiveHyphenLimit"), "val"),
+            NumberStyles.Integer, CultureInfo.InvariantCulture, out int limit) && limit > 0
+            ? limit
+            : 0;
+
+        bool keep = CompatSetting(settings, "allowHyphenationAtTrackBottom") is not ("1" or "true" or "on");
+        bool keepLine = keep
+                        && CompatSetting(settings, "useWord2013TrackBottomHyphenation") is not ("1" or "true" or "on");
+
+        return new HyphenationRules(
+            Zone: Length.FromTwips(zone),
+            NoCaps: Word.IsOn(Word.Child(settings, "doNotHyphenateCaps")),
+            MaxConsecutive: consecutive,
+            KeepsLastLine: keepLine);
+    }
+
+    /// <summary>A Word compatibility setting's value, or null when the file does not state it.</summary>
+    private static string? CompatSetting(XElement? settings, string name)
     {
         const string wordUri = "http://schemas.microsoft.com/office/word";
 
         foreach (XElement setting in Word.Children(Word.Child(settings, "compat"), "compatSetting"))
         {
-            if (Word.Attribute(setting, "name") != "compatibilityMode") continue;
+            if (Word.Attribute(setting, "name") != name) continue;
             if (Word.Attribute(setting, "uri") != wordUri) continue;
 
-            if (int.TryParse(
-                    Word.Attribute(setting, "val"), NumberStyles.Integer, CultureInfo.InvariantCulture,
-                    out int mode))
-            {
-                return mode;
-            }
+            return Word.Attribute(setting, "val");
         }
 
-        return -1;
+        return null;
     }
 
     /// <summary>

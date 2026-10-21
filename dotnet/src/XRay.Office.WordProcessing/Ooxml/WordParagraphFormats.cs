@@ -291,13 +291,19 @@ internal static class WordParagraphFormats
     /// document's <c>compatibilityMode</c> decides. See
     /// <see cref="ParagraphFormat.ShrinksJustifiedBlanks"/>.
     /// </param>
+    /// <param name="hyphenation">
+    /// The document's automatic hyphenation, or null when it has none. A paragraph whose
+    /// <c>w:suppressAutoHyphens</c> is on, directly or through its style, is not hyphenated: dmapper maps the
+    /// element to <c>ParaIsHyphenation = !value</c> (<c>DomainMapper.cxx</c>:2024-2025).
+    /// </param>
     internal static ParagraphFormat Resolve(
         WordStyles styles,
         XElement? paragraphProperties,
         Length defaultTabInterval,
         Length? autoSpacing = null,
         IReadOnlyList<XElement>? tableStyle = null,
-        bool shrinksJustifiedBlanks = false)
+        bool shrinksJustifiedBlanks = false,
+        HyphenationRules? hyphenation = null)
     {
         ArgumentNullException.ThrowIfNull(styles);
 
@@ -388,6 +394,11 @@ internal static class WordParagraphFormats
             TabsOverSpacing = true,
 
             ShrinksJustifiedBlanks = shrinksJustifiedBlanks,
+
+            Hyphenation = hyphenation is not null
+                          && !IsOn(styles, paragraphProperties, styleId, "suppressAutoHyphens", tableStyle)
+                ? hyphenation
+                : null,
         };
     }
 

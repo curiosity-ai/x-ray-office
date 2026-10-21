@@ -743,6 +743,31 @@ public sealed class MeasuredParagraph
     public Length Width => Length.FromEmu(_prefixEmu[^1] + _trailingObjectsEmu);
 
     /// <summary>
+    /// The width of a hyphen set in the run holding a character, for a line hyphenated there.
+    /// </summary>
+    /// <remarks>
+    /// Writer's <c>SwHyphPortion</c> is measured in the font in force at the break, so the hyphen takes the
+    /// face, size, shaping and character width of the run the broken word's last character is in.
+    /// </remarks>
+    /// <param name="position">The character the hyphen follows.</param>
+    public Length HyphenWidthAt(int position)
+    {
+        MeasuredRun? found = null;
+        foreach (MeasuredRun run in _runs)
+        {
+            if (run.Run.Start > position && found is not null) break;
+            found = run;
+            if (run.Run.Covers(position)) break;
+        }
+
+        if (found is not { } holder) return Length.Zero;
+
+        ShapedText shaped = TextShaper.Default.Shape(holder.Run.Face, "-", holder.Run.EffectiveShaping);
+        return Length.FromEmu(
+            Scaled(shaped.Scale(shaped.AdvanceInDesignUnits, holder.Run.EmSize).Emu, holder.Run.WidthScale));
+    }
+
+    /// <summary>
     /// The natural line height and ascent for a range of the text.
     /// </summary>
     /// <remarks>

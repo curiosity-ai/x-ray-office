@@ -348,6 +348,32 @@ public class RtfReaderTests
     }
 
     [Fact]
+    public void OnlyTheFallbackCharactersAreSkippedNotTheRestOfTheText()
+    {
+        // Pandoc writes a typographic apostrophe as \u8217' with the rest of the word straight after
+        // it, so the fallback and the text arrive as one token. Skipping the token lost "s swim!".
+        OpenLiteral("{\\rtf1\\ansi\\pard Let\\u8217's swim!\\par}")
+            .Content.GetText().ShouldBe("Let\u2019s swim!\n");
+    }
+
+    [Theory]
+    // Each expectation is what LibreOffice 26.8.1.1 draws for the same paragraph: a control word
+    // neither counts as a fallback character nor ends the skip, a hex escape counts one, a brace
+    // hands the outer group back the count it had, and \uc0 skips nothing.
+    [InlineData("\\uc2\\u8217xyBC", "A\u2019BC")]
+    [InlineData("\\u8217\\b xB\\b0 C", "A\u2019BC")]
+    [InlineData("\\u8217{x}B", "A\u2019")]
+    [InlineData("\\u8217\\'92B", "A\u2019B")]
+    [InlineData("\\uc0\\u8217B", "A\u2019B")]
+    [InlineData("\\uc3\\u8217\\'92xyB", "A\u2019B")]
+    [InlineData("\\uc2\\u8217x{\\i y}zB", "A\u2019B")]
+    public void TheFallbackIsCountedInCharactersAcrossControlWordsAndGroups(string body, string expected)
+    {
+        OpenLiteral("{\\rtf1\\ansi\\pard A" + body + "\\par}")
+            .Content.GetText().ShouldBe(expected + "\n");
+    }
+
+    [Fact]
     public void ANegativeUnicodeParameterIsAHighCodePoint()
     {
         // RTF writes \uN signed, so anything above U+7FFF arrives negative: -3600 is U+F1F0.
