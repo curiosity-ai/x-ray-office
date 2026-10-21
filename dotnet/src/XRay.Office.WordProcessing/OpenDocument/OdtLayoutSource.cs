@@ -1548,6 +1548,22 @@ public sealed partial class OdtLayoutSource
         /// <summary>The link the text being emitted is inside, or null.</summary>
         private string? _link;
 
+        /// <summary>
+        /// True while a white-space character in the file would be dropped rather than become a space: at the
+        /// paragraph's start, and directly after another collapsed one.
+        /// </summary>
+        /// <remarks>
+        /// <c>XMLTextImportHelper::InsertString</c>'s flag (<c>xmloff/source/text/txtimp.cxx</c>:707-736): ODF
+        /// collapses each run of space, tab, carriage return and line feed in character data to one space and
+        /// drops a run at the start of the paragraph. The flag lives across elements — a run that ends inside a
+        /// span still swallows the blank that opens the next — and <see cref="EndsLeadingSpace"/> lists what
+        /// clears it. Without this a pretty-printed paragraph laid out its indentation and broke its line at
+        /// every newline: pandoc's footer <c>&lt;text:p&gt;⏎ &lt;text:page-number&gt;…&lt;/text:page-number&gt;⏎
+        /// &lt;/text:p&gt;</c> was a line taller than 26.8.1.1's and its number drawn 13 pt off centre, and
+        /// <c>A␣␣⏎␣␣B</c> was two lines where the reference draws <c>A B</c> on one.
+        /// </remarks>
+        private bool _ignoreLeadingSpace = true;
+
         /// <summary>The bookmarks the paragraph holds, with the offsets they sit at.</summary>
         internal IReadOnlyList<PageAnchor> Anchors => _anchors;
 
@@ -1635,11 +1651,12 @@ public sealed partial class OdtLayoutSource
                 switch (node)
                 {
                     case XText textNode:
-                        Emit(textNode.Value);
+                        Emit(Collapse(textNode.Value));
                         break;
 
                     case XElement child when child.Name.NamespaceName == OdfNamespaces.Text:
                         AppendTextElement(child, depth);
+                        if (EndsLeadingSpace(child.Name.LocalName)) _ignoreLeadingSpace = false;
                         break;
 
                     // A comment's anchor occupies a position and draws nothing; its body is another flow,
@@ -1655,6 +1672,7 @@ public sealed partial class OdtLayoutSource
                     case XElement child when child.Name.NamespaceName == OdfNamespaces.Office
                                              && child.Name.LocalName is "annotation" or "annotation-end":
                         Emit(AnchorCharacter.ToString());
+                        _ignoreLeadingSpace = false;
                         break;
 
                     // A floating frame is *in* the paragraph and is not part of it: its own text belongs
@@ -1663,10 +1681,12 @@ public sealed partial class OdtLayoutSource
                     // at, which is what a character anchor is measured in.
                     case XElement child when OdfFrames.IsFrame(child):
                         _frames.Add(new FrameAnchor(_builder.Length, child));
+                        _ignoreLeadingSpace = false;
                         break;
 
                     case XElement child:
                         Append(child, depth + 1);
+                        _ignoreLeadingSpace = false;
                         break;
 
                     default:
@@ -1751,7 +1771,15 @@ public sealed partial class OdtLayoutSource
                 case "page-number" or "page-count":
                 {
                     int at = _builder.Length;
-                    Append(child, depth + 1);
+
+                    // The cached value with its whitespace taken out, not the element's text as written. A
+                    // pretty-printed document — pandoc writes `<text:page-number>⏎          1</text:page-number>` —
+                    // otherwise puts a line break and ten spaces into the footer, which made it a line taller and
+                    // centred the number 16 pt right of where 26.8.1.1 draws it. LibreOffice never reads the
+                    // content at all: the field is recomputed on load and the element's text is discarded
+                    // (`XMLPageNumberImportContext`, `xmloff/source/text/txtfldi.cxx`:739-815, which reads only the attributes), so the digits are all
+                    // that can be meant.
+                    Emit(string.Concat(child.Value.Where(character => !char.IsWhiteSpace(character))));
 
                     bool previousOrNext =
                         child.Attribute(XName.Get("select-page", OdfNamespaces.Text))?.Value
@@ -1816,6 +1844,48 @@ public sealed partial class OdtLayoutSource
                     break;
             }
         }
+
+        /// <summary>Character data as ODF's white-space rule leaves it; see <see cref="_ignoreLeadingSpace"/>.</summary>
+        private string Collapse(string text)
+        {
+            StringBuilder collapsed = new(text.Length);
+            foreach (char character in text)
+            {
+                if (character is ' ' or '\t' or '\n' or '\r')
+                {
+                    if (!_ignoreLeadingSpace) collapsed.Append(' ');
+                    _ignoreLeadingSpace = true;
+                }
+                else
+                {
+                    _ignoreLeadingSpace = false;
+                    collapsed.Append(character);
+                }
+            }
+
+            return collapsed.ToString();
+        }
+
+        /// <summary>
+        /// True when a <c>text:</c> element puts something into the paragraph after which a blank counts again.
+        /// </summary>
+        /// <remarks>
+        /// <c>XMLImpSpanContext_Impl::CreateSpanContext</c> (<c>xmloff/source/text/txtparai.cxx</c>:1308-1530):
+        /// a span, a hyperlink, ruby and a meta pass the flag through to their content, the marks — bookmarks,
+        /// reference marks, index marks, tracked-change boundaries — leave it alone, and everything else (a
+        /// tab, a line break, <c>text:s</c>, a note, a field, a frame, anything unknown) clears it.
+        /// </remarks>
+        private static bool EndsLeadingSpace(string localName) => localName switch
+        {
+            "span" or "a" or "ruby" or "ruby-base" or "meta" or "meta-field" => false,
+            "bookmark" or "bookmark-start" or "bookmark-end"
+                or "reference-mark" or "reference-mark-start" or "reference-mark-end"
+                or "toc-mark" or "toc-mark-start" or "toc-mark-end"
+                or "user-index-mark" or "user-index-mark-start" or "user-index-mark-end"
+                or "alphabetical-index-mark" or "alphabetical-index-mark-start" or "alphabetical-index-mark-end"
+                or "change" or "change-start" or "change-end" or "soft-page-break" => false,
+            _ => true,
+        };
 
         /// <summary>The address an <c>xlink:href</c> names, with a place in this document spelled <c>#name</c>.</summary>
         private static string? LinkAddress(string href)
