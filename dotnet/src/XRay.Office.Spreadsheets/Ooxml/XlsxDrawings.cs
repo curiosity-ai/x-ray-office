@@ -175,6 +175,14 @@ internal static class XlsxDrawings
         // 18, and those rows are recomputed shorter on load — so the anchor gives 286.6 pt where the
         // stated extent gives 300.75 and the reference draws 300.73. A 4.7% error in a picture's
         // height, on a page whose word count is exact.
+        //
+        // A quarter-turned shape's stated size is exchanged first (cool#16182, 6e9467abfb46, in
+        // 26.8.1.1: `drawingfragment.cxx`:284-301 there). The anchor rectangle of such a shape is
+        // the bounding box of the *turned* shape, so the reflection `SheetPageGraphics.Reflected`
+        // applies afterwards swaps the two back and the shape keeps its stated orientation.
+        // Without the pre-swap a bar stated 3000000 x 1000000 EMU and turned by 90 degrees came out
+        // lying down where 26.8.1.1 stands it up (54 x 164 px at 50 dpi; 26.2.4.2, which predates
+        // the fix, 163 x 54).
         SheetAnchorKind resolved = kind;
         if (kind == SheetAnchorKind.TwoCell
             && Attribute(anchor, "editAs") is "oneCell" or "absolute"
@@ -182,7 +190,7 @@ internal static class XlsxDrawings
                { Width.Emu: > 0, Height.Emu: > 0 } stated)
         {
             resolved = SheetAnchorKind.OneCell;
-            extent = stated;
+            extent = IsQuarterTurned(transform) ? new DocSize(stated.Height, stated.Width) : stated;
         }
 
         SheetDrawing drawing = new()
@@ -740,8 +748,20 @@ internal static class XlsxDrawings
                 : fallback);
 
     /// <summary>The <c>a:xfrm</c> a shape or a group states, or null when it states none.</summary>
+    /// <remarks>
+    /// <strong>A graphic frame states its transform in a different place and a different
+    /// namespace</strong>: <c>xdr:xfrm</c>, a direct child of <c>xdr:graphicFrame</c>, which
+    /// <c>GraphicalObjectFrameContext</c> reads as the shape's own <c>Transform2DContext</c>
+    /// (<c>oox/source/drawingml/graphicshapecontext.cxx</c>:161-162). Looking for it under
+    /// <c>spPr</c> found nothing for every chart, so the <c>editAs</c> rule below never fired
+    /// for one and a <c>twoCellAnchor editAs="oneCell"</c> chart was drawn from cell to cell:
+    /// <c>xlsx/test_01.xlsm</c>'s two charts came out 443 pt wide where 26.8.1.1 keeps the
+    /// stated 326.2 pt. The children are DrawingML's, <c>a:off</c> and <c>a:ext</c>.
+    /// </remarks>
     private static XElement? Transform(XElement? shape)
-        => Child(FirstChild(shape, "spPr", "grpSpPr"), MainNamespace, "xfrm");
+        => shape?.Name.LocalName == "graphicFrame" && shape.Name.NamespaceName == DrawingNamespace
+            ? Child(shape, DrawingNamespace, "xfrm")
+            : Child(FirstChild(shape, "spPr", "grpSpPr"), MainNamespace, "xfrm");
 
     /// <summary>
     /// The leaf shapes inside a drawing, as fractions of its own rectangle.
