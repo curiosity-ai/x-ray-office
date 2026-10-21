@@ -16,8 +16,9 @@ of the PDFs and found the comparison was void. So the faces are compared *first*
 document whose two sides resolve different families is `unscoreable` against that reference
 rather than "wrong".
 
-**2. Two references, one verdict.** `soffice` here is 24.2.7.2 and the tree is calibrated to
-26.2.4.2. Rescoring the worst thirty word-processing documents put eleven of them in the
+**2. Two references, one verdict.** `soffice` here is 24.2.7.2 and the tree was calibrated to
+26.2.4.2; since 2026-10-21 the target is the 26.8 branch daily, which `LO26` now defaults to (the
+variable keeps its old name). Rescoring the worst thirty word-processing documents put eleven of them in the
 version gap rather than in the tree. Scoring against one binary and reporting the number is
 how that happened; this scores against both and makes the disagreement the verdict.
 
@@ -43,7 +44,9 @@ _spec = importlib.util.spec_from_file_location("cmpimg", HERE / "compare-images.
 CMP = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(CMP)
 
 LO24 = os.environ.get("LO24", "soffice")
-LO26 = os.environ.get("LO26", "/opt/libreoffice26.2/program/soffice")
+# The target reference. Named LO26 for history; since 2026-10-21 it is the 26.8 branch daily
+# standing in for the unpublished 26.8.2. See `dotnet/CLAUDE.md`.
+LO26 = os.environ.get("LO26", "/opt/libreofficedev26.8/program/soffice")
 CLI = os.environ.get("XRAY_OFFICE_CLI", "")
 
 # A subset-embedded face is written `ABCDEF+Liberation Serif`; the tag is per-file and says

@@ -55,6 +55,11 @@ namespace XRay.Office.Fidelity.Tests;
 // Reach of the gap: 0.113 pt on a far edge, on an XLSX drawing whose `to` offset reaches the last
 // 5/100 mm of its end cell. It moves no gate column and clears every other comparison's tolerance;
 // this one asserts at 0.1 pt and misses by 0.070 pt across and 0.042 pt down.
+//
+// [2026-10-21, the 26.8 branch daily] Still failing, on the same classification. The daily and
+// 26.8.1.1 both draw the XLSX picture at 94.961 x 46.715 pt; this tree's 95.074 x 46.800 misses by
+// 0.113 across and 0.085 down. 26.2.4.2, re-rendered the same day under the harness's font
+// configuration, draws 94.904 x 46.658. The FODS arm passes against all three.
 public sealed class SheetDrawingComparisonTests : IDisposable
 {
     /// <summary>A tenth of a point, two twips, as everywhere else in this project.</summary>

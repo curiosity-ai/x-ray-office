@@ -37,8 +37,8 @@ about an import rather than a layout, it is the first call, not the last.**
 
 ### Four rules that cost rounds to learn
 
-1. **Set `REF_SOFFICE`.** PATH is 24.2.7.2 and the tree is calibrated to 26.2.4.2; they
-   disagree on real documents. Every script here prints the one it resolved — read that line
+1. **Set `REF_SOFFICE`.** PATH is 24.2.7.2 and the target is the 26.8 branch daily at
+   `/opt/libreofficedev26.8` (26.2.4.2 before 2026-10-21); they disagree on real documents. Every script here prints the one it resolved — read that line
    before the numbers.
 2. **Do not write your own scorer.** It has produced a wrong published call twice, both times
    a hand-rolled mean absolute difference. See below.
@@ -187,7 +187,7 @@ the failure modes.
 
 ### Set `REF_SOFFICE` before any of this
 
-`/usr/bin/soffice` is 24.2.7.2 and the tree is calibrated to 26.2.4.2. `look.py`,
+`/usr/bin/soffice` is 24.2.7.2 and the target is the 26.8 branch daily. `look.py`,
 `first-divergence.py`, `line-anatomy.py` and `corpus-parity.sh` hard-coded PATH until round
 180; all of them now read `${REF_SOFFICE:-soffice}`. `verdict.py` is the exception by design —
 it scores against **both** binaries and makes their disagreement the verdict, through `LO24`
@@ -296,8 +296,8 @@ is a void comparison against it, and two agents burned hours on
 **one** side only is a fallback, not a swap: it is noted and still scored. That distinction was
 added after the blunt rule called `033_Event_planning_tracker` unscoreable on one fallback face.
 
-**2. Both references, one verdict.** `24.2.7.2` is what the gate measures against and `26.2.4.2`
-is what the tree targets. `matches-26.2-only` and `references-disagree` are verdicts the tool
+**2. Both references, one verdict.** `24.2.7.2` is PATH and `LO26` is what the tree targets — the
+26.8 branch daily since 2026-10-21, reported under the historical tag `26.2`. `matches-26.2-only` and `references-disagree` are verdicts the tool
 emits, not conclusions you reach afterwards.
 
 **3. Words per page, never per document.** `033_Event_planning_tracker` was short on page 1 and

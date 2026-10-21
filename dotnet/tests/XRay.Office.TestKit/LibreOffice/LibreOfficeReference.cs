@@ -10,7 +10,17 @@ namespace XRay.Office.TestKit.LibreOffice;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <strong>The reference is 26.2.4.2, and it is named here rather than taken from
+/// <strong>Since 2026-10-21 the reference is 26.8.2, represented by the 26.8 branch daily at
+/// <c>/opt/libreofficedev26.8</c></strong> (<c>LibreOfficeDev 26.8.3.0.0 9dcd8a837588</c>).
+/// 26.8.2 was never published as a binary; the daily carries every commit on its release branch
+/// but two crash fixes and dependency bumps. <c>/opt/libreoffice26.2</c> (26.2.4.2, which the tree
+/// was first calibrated against) and <c>/opt/libreoffice26.8</c> (26.8.1.1) remain for explaining a
+/// difference, through <see cref="OverrideVariable"/>, and are not the target. The reference is run
+/// under <see cref="ReferenceFontconfig"/>'s configuration, without which every installed
+/// LibreOffice draws an unknown family in Inter here and the check below refuses it.
+/// </para>
+/// <para>
+/// <strong>The reference was 26.2.4.2, and it is named here rather than taken from
 /// <c>PATH</c>.</strong> <c>/usr/bin/soffice</c> in this container is 24.2.7.2, and the two
 /// versions do not merely differ in polish — they resolve fonts by different rules.
 /// <c>FontConfigManager::Substitute</c> appends <c>"serif"</c> as a second <c>FC_FAMILY</c> for
@@ -60,14 +70,14 @@ namespace XRay.Office.TestKit.LibreOffice;
 public static class LibreOfficeReference
 {
     /// <summary>The reference this tree targets when nothing overrides it.</summary>
-    public const string PinnedPath = "/opt/libreoffice26.2/program/soffice";
+    public const string PinnedPath = "/opt/libreofficedev26.8/program/soffice";
 
     /// <summary>The environment variable that overrides <see cref="Path"/>.</summary>
     public const string OverrideVariable = "XRAY_OFFICE_SOFFICE";
 
     /// <summary>The <c>soffice</c> the harness drives.</summary>
     /// <remarks>
-    /// <c>XRAY_OFFICE_SOFFICE</c> wins; then the pinned 26.2, when it is there; then whatever is on
+    /// <c>XRAY_OFFICE_SOFFICE</c> wins; then the pinned daily, when it is there; then whatever is on
     /// <c>PATH</c>, so a machine with one LibreOffice still works and says which one it used.
     /// </remarks>
     public static string Path => Resolved.Value;
@@ -135,15 +145,27 @@ public static class LibreOfficeReference
                 + "Noto (NotoSans-*, NotoSerif-*) duplicates nothing installed, so the documented "
                 + "mv for the metric-compatible duplicates leaves it in place and it answers for "
                 + "every family the system lacks. Every comparison here would then be void. Fix:\n"
-                + "  D=/opt/libreoffice26.2/share/fonts/truetype\n"
+                + $"  D={BundledFontDirectory(binary)}\n"
                 + "  mkdir -p $D/.noto-aside && mv $D/Noto{Sans,Serif}-*.ttf $D/.noto-aside/\n"
                 + "Leave NotoSansArabic, NotoSerifHebrew and the other script-specific faces: they "
-                + "carry coverage the system does not have.",
+                + "carry coverage the system does not have. A system face such as Inter means a "
+                + "fontconfig preference instead: ReferenceFontconfig drops a local conf.d file "
+                + "that aliases a family, and a caller's own FONTCONFIG_FILE is used as it is.",
                 version,
                 face);
         }
 
         return new ReferenceCheck(true, string.Empty, version, face);
+    }
+
+    /// <summary>The bundled font directory of the install a binary belongs to, for a fix-it line.</summary>
+    private static string BundledFontDirectory(string binary)
+    {
+        string? program = System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(binary));
+        string? install = program is null ? null : System.IO.Path.GetDirectoryName(program);
+        return install is null
+            ? "<install>/share/fonts/truetype"
+            : System.IO.Path.Combine(install, "share", "fonts", "truetype");
     }
 
     /// <summary>

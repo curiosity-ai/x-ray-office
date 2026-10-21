@@ -1129,7 +1129,8 @@ python3 $S/make-batches.py /c/sandbox/workdir/sample-files /tmp/triage/complexit
 
 ### Set `REF_SOFFICE`, and read the line the sweep prints back
 
-`/usr/bin/soffice` is 24.2.7.2 and the tree is calibrated to 26.2.4.2. Both sweeps here now
+`/usr/bin/soffice` is 24.2.7.2 and the target is the 26.8 branch daily at
+`/opt/libreofficedev26.8` (26.2.4.2 before 2026-10-21). Both sweeps here now
 resolve `${REF_SOFFICE:-soffice}` and announce the version they got; until round 180
 `track-ink-sweep.sh` and `ref-baseline.sh` hard-coded PATH while `batch-check.sh` did not, so
 an ink sweep and a gate sweep run side by side measured different binaries in silence.

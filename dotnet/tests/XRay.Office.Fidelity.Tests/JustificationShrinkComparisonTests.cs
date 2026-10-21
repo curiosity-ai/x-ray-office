@@ -45,6 +45,11 @@ namespace XRay.Office.Fidelity.Tests;
 // `justify-shrink-2013.docx`, now on line 3 rather than on the line count, and what it is failing on is
 // the advance divergence at a tie the reference itself does not resolve consistently. It is not ours to
 // close here, and the page width was deliberately not moved to make it green.
+//
+// [2026-10-21, the 26.8 branch daily] Unchanged by the retarget: against the daily and against
+// 26.2.4.2 re-run the same day, the first four line ends agree within the tolerance and the test fails
+// on line 5, which ends at 83.20 pt here against 113.70 pt in both references — the word the tie moves
+// lands on the last line rather than on line 3's.
 public sealed class JustificationShrinkComparisonTests : IDisposable
 {
     /// <summary>How far a drawn line's right edge may sit from LibreOffice's, in points.</summary>

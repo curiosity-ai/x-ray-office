@@ -41,9 +41,10 @@ public readonly record struct LineEnd(string? Type, string? Width, string? Lengt
 /// <strong>The shaft is shortened by the marker's length less a fifteenth of its width.</strong>
 /// That fifteenth is a deliberate overlap — "a compromise between straight and peaked markers",
 /// in the comment at <c>polygonprimitive2d.cxx:730</c> — and without it a peaked marker shows a
-/// gap between its notch and the line. Measured on <c>slide-shape-features.pptx</c>: a 15.02 pt
-/// stealth tail on a line ending at 504 pt leaves the shaft ending at 489.969, which is
-/// 15.024 − 15.024/15 to within six thousandths of a point.
+/// gap between its notch and the line. Measured on <c>slide-shape-features.pptx</c> against 26.2.4.2:
+/// a 15.02 pt stealth tail on a line ending at 504 pt left the shaft ending at 489.969, which is
+/// 15.024 − 15.024/15 to within six thousandths of a point. The 26.8 branch stops a notched
+/// marker's shaft at the notch instead; see <see cref="Consumed"/>.
 /// </para>
 /// </remarks>
 public static class LineEnds
@@ -157,9 +158,77 @@ public static class LineEnds
 
         markers.Add(path);
 
-        // What the shaft gives up: the marker's length beyond the docking point, less the
-        // fifteenth of its width that makes the two overlap.
-        return Math.Max(0, (length * (1.0 - docking)) - (width / 15.0));
+        // What the shaft gives up: the marker's length beyond the docking point, or less where the
+        // marker's back is notched, less the fifteenth of its width that makes the two overlap.
+        double consumed = Consumed([.. shape(halfWidth)], length, docking);
+        return Math.Max(0, consumed - (width / 15.0));
+    }
+
+    /// <summary>
+    /// How much of the line a marker consumes before the overlap: its length beyond the docking
+    /// point, or only as far as the notch in its back where the centre line leaves it there.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>basegfx::utils::createAreaGeometryForLineStartEnd</c>
+    /// (<c>basegfx/source/polygon/b2dlinegeometry.cxx</c>, upstream <c>a0c13790095</c>, "shorten line
+    /// to centerline notch for concave-back arrows", on the 26.8 branch and in 26.8.1.1, not in
+    /// 26.2.4.2): it collects every crossing of the marker's centre line with its outline, and when
+    /// an odd number of them lie at or above the tip — so the centre line is inside the marker just
+    /// past it — the line stops at the first crossing beyond, if that is nearer than the marker's
+    /// back. Of the five DrawingML markers only <c>stealth</c> has such a notch, at 60 % of its
+    /// length; the others are crossed at their back and consume what they always did.
+    /// </para>
+    /// <para>
+    /// Measured on <c>slide-shape-features.pptx</c> slide 3, a large stealth tail on a 3 pt line
+    /// ending at 504 pt: 26.8's shaft ends at 495.978, 26.2.4.2's at 489.969, and
+    /// <c>504 − (0.6 × 15 − 15/15)</c> is 496.0.
+    /// </para>
+    /// </remarks>
+    /// <param name="outline">The marker, in its hundred-by-hundred space with the point at the top.</param>
+    /// <param name="length">The marker's length along the line.</param>
+    /// <param name="docking">0 for a marker whose point is the line's end, 0.5 for a centred one.</param>
+    private static double Consumed(List<(double X, double Y)> outline, double length, double docking)
+    {
+        double consumed = length * (1.0 - docking);
+        int count = outline.Count;
+        if (count < 2) return consumed;
+
+        // The marker as the line meets it: the centre line is x = 0 and y runs from the docking
+        // point back along the line.
+        double X(int i) => outline[i % count].X - 50.0;
+        double Y(int i) => ((outline[i % count].Y / 100.0) - docking) * length;
+
+        List<double> crossings = [];
+        for (int i = 0; i < count; i++)
+        {
+            double x1 = X(i);
+            double x2 = X(i + 1);
+
+            if ((x1 < 0 && x2 > 0) || (x1 > 0 && x2 < 0))
+            {
+                double t = -x1 / (x2 - x1);
+                crossings.Add(Y(i) + (t * (Y(i + 1) - Y(i))));
+            }
+            else if (x1 == 0 && x2 != 0)
+            {
+                double previous = X(i + count - 1);
+                if ((previous < 0 && x2 > 0) || (previous > 0 && x2 < 0)) crossings.Add(Y(i));
+            }
+        }
+
+        crossings.Sort();
+
+        const double Epsilon = 1e-9;
+        if (crossings.Count(y => y < Epsilon) % 2 == 0) return consumed;
+
+        foreach (double y in crossings)
+        {
+            if (y <= Epsilon) continue;
+            return Math.Min(consumed, y);
+        }
+
+        return consumed;
     }
 
     /// <summary>How many times the base width a marker is, by <c>sm</c>/<c>med</c>/<c>lg</c>.</summary>

@@ -21,8 +21,8 @@ public class FontIndexWidthAndAliasTests
     private static readonly string[] CondensedCandidates =
     [
         "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf",
+        "/opt/libreofficedev26.8/share/fonts/truetype/.condensed-aside/DejaVuSansCondensed.ttf",
         "/opt/libreoffice26.8/share/fonts/truetype/.condensed-aside/DejaVuSansCondensed.ttf",
-        "/opt/libreoffice26.2/share/fonts/truetype/.condensed-aside/DejaVuSansCondensed.ttf",
     ];
 
     [Fact]
