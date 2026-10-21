@@ -87,6 +87,13 @@ internal sealed class XlsxChartRanges(XlsxFile file, XlsxSheetReader reader)
     public ChartRangeResolver Resolver(bool plotVisibleOnly)
         => formula => Resolve(formula, plotVisibleOnly);
 
+    /// <summary>
+    /// What <paramref name="formula"/> names: a workbook-level defined name's value, or the
+    /// formula itself. The chartex reader asks it for the range behind a <c>_xlchart.v1.n</c>, to
+    /// name a series the way Calc names one it has only a range for.
+    /// </summary>
+    public string Expand(string formula) => DefinedName(formula.Trim()) ?? formula.Trim();
+
     /// <summary>The cells a <c>c:f</c> names, or null when it names nothing this can reach.</summary>
     /// <param name="formula">The <c>c:f</c> text.</param>
     /// <param name="plotVisibleOnly">

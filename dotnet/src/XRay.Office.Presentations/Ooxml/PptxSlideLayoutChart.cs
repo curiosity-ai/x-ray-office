@@ -41,9 +41,17 @@ internal sealed partial class PptxSlideLayout
         XElement frame, PptxSlide slide, SlideTheme theme, AffineTransform space)
     {
         XElement? graphic = Drawing.Child(Drawing.Child(frame, "graphic"), "graphicData");
-        if (Drawing.Attribute(graphic, "uri") != DrawingChart.ChartUri) return [];
+        string? uri = Drawing.Attribute(graphic, "uri");
 
-        XName chart = XName.Get("chart", OoxmlNamespaces.DrawingMLChart);
+        // A chartex chart — funnel, waterfall, histogram and the rest — is a second payload under
+        // its own URI and namespace, and Impress reads it through the same oox importer a workbook
+        // does. See DrawingChartex.
+        bool extended = uri == DrawingChartex.ChartUri;
+        if (uri != DrawingChart.ChartUri && !extended) return [];
+
+        XName chart = extended
+            ? XName.Get("chart", OoxmlNamespaces.ExtendedChart)
+            : XName.Get("chart", OoxmlNamespaces.DrawingMLChart);
         string? relationshipId = graphic!.Element(chart)
             ?.Attribute(XName.Get("id", OoxmlNamespaces.Relationships))?.Value;
 
@@ -59,12 +67,15 @@ internal sealed partial class PptxSlideLayout
         // first entry for the width. This is the route that was missing — both halves have been
         // read for rounds and nothing joined them, so every series stating no `c:spPr` was drawn
         // black at a hairline.
-        if (DrawingChartPlot.Read(
-                chartSpace, charted.Colours, _file.IsOffice2007, charted.Styles)
-            is not { } plot)
-        {
-            return [];
-        }
+        // A deck's chartex series carry their points in cx:lvl caches, so no resolver is needed —
+        // and the chart area gets no grey default border here, for the same Impress-only reason
+        // the c: reader gives (objectformatter.cxx:838-848).
+        ChartPlot? read = extended
+            ? DrawingChartex.Read(
+                chartSpace, charted.Colours, charted.Styles, automaticChartAreaLine: false)
+            : DrawingChartPlot.Read(chartSpace, charted.Colours, _file.IsOffice2007, charted.Styles);
+
+        if (read is not { } plot) return [];
 
         // A frame's transform is p:xfrm — PresentationML's own element with DrawingML's a:off and
         // a:ext inside it — rather than the a:xfrm a shape carries. Reading it with the drawing
