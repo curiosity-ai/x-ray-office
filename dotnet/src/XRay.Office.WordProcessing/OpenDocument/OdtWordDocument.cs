@@ -113,7 +113,11 @@ public sealed class OdtWordDocument : IWordProcessingDocument, IPaginatedDocumen
             pictures: new OdfPictures(_inner.File, _laidOut),
             settings: _inner.File.Settings,
             sectionMargins: [.. Sections.Select(section => section.Page.Margins.Left)],
-            sectionCount: masters.Count);
+            sectionCount: masters.Count)
+        {
+            BreakWidth = Sections.Count > 0 ? Sections[0].Page.TextArea.Width : Length.FromTwips(9360),
+            DropCapPunctuationRule = OdtLayoutSource.DropCapPunctuation(_inner.File.Settings),
+        };
 
         List<PageBlock> blocks = source.Read(body);
 
