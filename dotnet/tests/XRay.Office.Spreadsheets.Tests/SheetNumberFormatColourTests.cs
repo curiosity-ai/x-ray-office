@@ -49,13 +49,15 @@ namespace XRay.Office.Spreadsheets.Tests;
 /// exactly — 4838 red spans, 686 black, 343 pages on both sides.
 /// </para>
 /// <para>
-/// <strong><c>[COLOR n]</c> is not resolved</strong>, and that is deliberate: LibreOffice takes it
-/// from the palette at <c>SvtPathOptions().GetPalettePath()</c>, i.e. the running installation's
-/// own <c>share/palette/standard.soc</c>. Index 9 there is <c>#dddddd</c> "Light Gray 4", which is
-/// exactly what 26.2.4.2 paints for <c>[Color10]</c>. Corpus reach of the gap is <b>18 cells in
-/// one document</b>. See <c>probes/numfmtcolour-r139/results.md</c>, which also records that the
-/// ODF twin is still wrong for a larger reason — <c>style:map</c> is not followed for number
-/// styles at all.
+/// <strong><c>[COLOR n]</c> is resolved against LibreOffice's standard palette</strong>, the
+/// <c>share/palette/standard.soc</c> Calc's colour list loads. Index 9 there is <c>#dddddd</c>
+/// "Light Gray 4", which is exactly what 26.2.4.2 paints for <c>[Color10]</c> (18 cells in one
+/// corpus document, <c>probes/numfmtcolour-r139/results.md</c>). It was left unresolved while the
+/// palette read as one installation's UI setting; 26.8.1.1's ODF importer writes palette colours
+/// as <c>[COLORn]</c> (tdf#146404), the file is byte-identical in both references, and 26.8.1.1
+/// was measured on an authored workbook to paint <c>[Color10]</c>, <c>[Color21]</c>,
+/// <c>[Color24]</c>, <c>[Color64]</c> and <c>[COLOR 21]</c> in their palette colours and to print
+/// <c>[Color65]0.000</c> in the standard format, as this tree now does.
 /// </para>
 /// </remarks>
 public sealed class SheetNumberFormatColourTests
@@ -109,10 +111,26 @@ public sealed class SheetNumberFormatColourTests
             .ShouldBe(Colour.FromRgb((uint)expected));
 
     [Theory]
-    // A palette index needs the running installation's own standard.soc, so it stays unresolved
-    // rather than being guessed at.
-    [InlineData("[COLOR10]0")]
-    [InlineData("[Color 10]0")]
+    [InlineData("[COLOR10]0", 0xDDDDDD)]
+    [InlineData("[Color 10]0", 0xDDDDDD)]
+    [InlineData("[Color21]0", 0x2A6099)]
+    [InlineData("[color24]0", 0x81D41A)]
+    [InlineData("[Color64]0", 0xFF5429)]
+    public void APaletteIndexIsReadFromTheStandardPalette(string code, int expected)
+        => NumberFormatCode.Parse(code).Sections[0].Colour
+            .ShouldBe(Colour.FromRgb((uint)expected));
+
+    /// <summary>
+    /// An index the scanner refuses cancels the code, and the cell keeps the standard format.
+    /// </summary>
+    [Theory]
+    [InlineData("[Color65]0.000")]
+    [InlineData("[Color0]0.000")]
+    [InlineData("0.0;[Color120]-0.0")]
+    public void APaletteIndexOutsideOneToSixtyFourMakesTheCodeGeneral(string code)
+        => NumberFormatCode.Parse(code).IsGeneral.ShouldBeTrue();
+
+    [Theory]
     // Not colours at all.
     [InlineData("[ENG]0")]
     [InlineData("[$-409]0")]

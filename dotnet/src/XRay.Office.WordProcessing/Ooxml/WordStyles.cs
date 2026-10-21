@@ -129,9 +129,12 @@ public sealed class WordStyle
 
         Dictionary<string, XElement> conditional = new(StringComparer.Ordinal);
         Dictionary<string, XElement> conditionalCells = new(StringComparer.Ordinal);
+        Dictionary<string, XElement> layers = new(StringComparer.Ordinal);
         foreach (XElement layer in Word.Children(element, "tblStylePr"))
         {
             if (Word.Attribute(layer, "type") is not { Length: > 0 } type) continue;
+
+            layers.TryAdd(type, layer);
 
             // First wins, because a style stating the same layer twice is stating it once and then
             // contradicting itself, and Word keeps the first. Each half is indexed on its own: a layer
@@ -144,6 +147,7 @@ public sealed class WordStyle
 
         ConditionalRunProperties = conditional;
         ConditionalCellProperties = conditionalCells;
+        ConditionalLayers = layers;
     }
 
     /// <summary>The identifier content refers to. Not the user-visible name.</summary>
@@ -210,6 +214,18 @@ public sealed class WordStyle
     /// <c>w:tcPr</c> and means different things there — character shading against cell shading.
     /// </remarks>
     public IReadOnlyDictionary<string, XElement> ConditionalCellProperties { get; }
+
+    /// <summary>
+    /// A table style's own <c>w:tblStylePr</c> elements, whole, by their <c>w:type</c>. Empty on every
+    /// other kind of style.
+    /// </summary>
+    /// <remarks>
+    /// What the writerfilter-shaped resolvers read — <see cref="WordStyles.TableStyleWriterLayers"/> — because
+    /// <c>TableStyleSheetEntry::AddTblStylePr</c> keeps a layer as one property map and decides what it
+    /// holds as a whole: whether the layer exists at all for <c>w:tblLook</c>'s purposes, and which
+    /// interior border it cancels.
+    /// </remarks>
+    public IReadOnlyDictionary<string, XElement> ConditionalLayers { get; }
 
     /// <summary>
     /// A table style's <c>w:tblPr</c>, or null. Meaningless on any other kind of style.
@@ -1057,6 +1073,73 @@ public sealed class WordStyles
 
         return layers;
     }
+
+    /// <summary>
+    /// The conditional layers of one table style that apply to a cell, the way writerfilter applies
+    /// them: the least specific first, so that a later one overrides an earlier one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>TableStyleSheetEntry::GetLocalPropertiesFromMask</c>
+    /// (<c>sw/source/writerfilter/dmapper/StyleSheetTable.cxx</c>:235-268) merges the layers in a fixed
+    /// order — <c>band2Horz</c>, <c>band1Horz</c>, <c>band2Vert</c>, <c>band1Vert</c>, <c>lastCol</c>,
+    /// <c>firstCol</c>, <c>lastRow</c>, <c>firstRow</c>, then the four corners — each one inserted over
+    /// what came before. That differs from §17.7.6 in two places that this keeps: a vertical band beats a
+    /// horizontal one, and a row edge beats a column edge.
+    /// </para>
+    /// <para>
+    /// <strong>Only the named style's own layers</strong>, and never <c>wholeTable</c>: the map is
+    /// <c>m_aStyles</c> of the one entry the table names, which <c>w:basedOn</c> does not reach, and the
+    /// order table has no row for <c>wholeTable</c>. That is narrower than
+    /// <see cref="TableStyleCellProperties"/>, whose shading reading is older and was measured on its own
+    /// documents; the borders and paragraph properties that go through here are writerfilter's.
+    /// </para>
+    /// </remarks>
+    /// <param name="tableStyleId">The <c>w:tblStyle</c> the table names, or null.</param>
+    /// <param name="conditions">
+    /// Which regions the cell is in, with <see cref="WordTableLook"/> already narrowed by
+    /// <see cref="TableStyleDefinesLayer"/> and bands counted one row or column wide.
+    /// </param>
+    public List<(string Type, XElement Layer)> TableStyleWriterLayers(
+        string? tableStyleId, WordTableStyleConditions conditions)
+    {
+        List<(string Type, XElement Layer)> layers = [];
+        if (Find(tableStyleId, WordStyleType.Table) is not { } style) return layers;
+
+        foreach (string name in WriterLayerOrder)
+        {
+            if (conditions.Names.Contains(name) && style.ConditionalLayers.TryGetValue(name, out XElement? layer))
+                layers.Add((name, layer));
+        }
+
+        return layers;
+    }
+
+    /// <summary>
+    /// Whether the named table style states anything in its own <c>w:tblStylePr</c> of one type.
+    /// </summary>
+    /// <remarks>
+    /// <c>DomainMapperTableHandler::endTableGetTableStyle</c> clears a <c>w:tblLook</c> bit whose layer the
+    /// style does not define — "disable styles that have no definition"
+    /// (<c>sw/source/writerfilter/dmapper/DomainMapperTableHandler.cxx</c>:449-459) — and the bit then
+    /// stops excluding the first or last row from the banding. <c>Has</c> asks whether the layer's map
+    /// holds any property, so an element with nothing but an empty <c>w:tblPr</c> does not count.
+    /// </remarks>
+    /// <param name="tableStyleId">The <c>w:tblStyle</c> the table names, or null.</param>
+    /// <param name="type">The layer's <c>w:type</c>, e.g. <c>firstRow</c>.</param>
+    public bool TableStyleDefinesLayer(string? tableStyleId, string type)
+        => Find(tableStyleId, WordStyleType.Table) is { } style
+           && style.ConditionalLayers.TryGetValue(type, out XElement? layer)
+           && layer.Elements().Any(half => half.HasElements);
+
+    /// <summary>
+    /// <c>aOrderedStyleTable</c>, least specific first (<c>StyleSheetTable.cxx</c>:243-257).
+    /// </summary>
+    private static readonly string[] WriterLayerOrder =
+    [
+        "band2Horz", "band1Horz", "band2Vert", "band1Vert", "lastCol", "firstCol", "lastRow", "firstRow",
+        "swCell", "seCell", "nwCell", "neCell",
+    ];
 
     /// <summary>
     /// The band sizes a table style declares — <c>w:tblStyleRowBandSize</c> and

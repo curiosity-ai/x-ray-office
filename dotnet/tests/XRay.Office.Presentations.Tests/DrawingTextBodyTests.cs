@@ -150,6 +150,104 @@ public class DrawingTextBodyTests
         Read(body).Select(p => p.ListMarker).ShouldBe(["5.", "6."]);
     }
 
+    /// <summary>
+    /// A list continues while its numbering type and <c>startAt</c> repeat, and restarts at its
+    /// own <c>startAt</c> when either changes — <c>n90255.pptx</c>'s shape.
+    /// </summary>
+    /// <remarks>
+    /// <c>ListNumberingState::markParagraph</c> (tdf#173712, <c>8f242675c1b1</c>, in 26.8.2). Five
+    /// two-item lists at one level, each repeating its own <c>startAt</c>: 26.8.2 and PowerPoint
+    /// draw <c>3 4 II III C D iv v f g</c>. Counting straight through, as this did, drew
+    /// <c>3 4 V VI G H ix x k l</c>; 26.8.1.1 restarts every item that states <c>startAt</c> and
+    /// draws <c>3 3 II II C C iv iv f f</c>, which is the reference's bug and is not ported.
+    /// </remarks>
+    [Fact]
+    public void AListRestartsWhenItsTypeOrStartChangesAndContinuesWhileTheyRepeat()
+    {
+        XElement body = Parse(
+            Item("arabicPeriod", 3) + Item("arabicPeriod", 3)
+            + Item("romanUcPeriod", 2) + Item("romanUcPeriod", 2)
+            + Item("alphaUcPeriod", 3) + Item("alphaUcPeriod", 3)
+            + Item("romanLcPeriod", 4) + Item("romanLcPeriod", 4)
+            + Item("alphaLcParenR", 6) + Item("alphaLcParenR", 6));
+
+        Read(body).Select(p => p.ListMarker).ShouldBe(
+            ["3.", "4.", "II.", "III.", "C.", "D.", "iv.", "v.", "f)", "g)"]);
+
+        static string Item(string type, int start)
+            => $"<a:p><a:pPr><a:buAutoNum type=\"{type}\" startAt=\"{start}\"/></a:pPr>"
+               + "<a:r><a:t>x</a:t></a:r></a:p>";
+    }
+
+    /// <summary>
+    /// A changed <c>startAt</c> on the same type restarts the list too, downwards as well as up.
+    /// </summary>
+    [Fact]
+    public void AChangedStartAtRestartsTheList()
+    {
+        XElement body = Parse(
+            Item(5) + Item(5) + Item(3) + Item(3) + Item(null));
+
+        // An absent startAt counts as 1, so the last item is a change as well.
+        Read(body).Select(p => p.ListMarker).ShouldBe(["5.", "6.", "3.", "4.", "1."]);
+
+        static string Item(int? start)
+            => "<a:p><a:pPr><a:buAutoNum type=\"arabicPeriod\""
+               + (start is { } at ? $" startAt=\"{at}\"" : "")
+               + "/></a:pPr><a:r><a:t>x</a:t></a:r></a:p>";
+    }
+
+    /// <summary>
+    /// A bulleted paragraph ends the numbered lists at its own level and every deeper one.
+    /// </summary>
+    /// <remarks>
+    /// <c>markParagraph</c> clears the levels from its own down for a paragraph that is not
+    /// numbered, and the outliner's walk stops at a shallower paragraph whatever it holds
+    /// (<c>Outliner::ImplGetNumbering</c>, <c>outliner.cxx:1676-1678</c>). Only a numbered parent
+    /// used to restart its children.
+    /// </remarks>
+    [Fact]
+    public void ABulletedParentRestartsTheNumberedListBelowIt()
+    {
+        XElement body = Parse(
+            Numbered(1) + Numbered(1) + Bulleted(0) + Numbered(1));
+
+        Read(body).Select(p => p.ListMarker).ShouldBe(["1.", "2.", "\u2022", "1."]);
+
+        static string Numbered(int level)
+            => $"<a:p><a:pPr lvl=\"{level}\"><a:buAutoNum type=\"arabicPeriod\"/></a:pPr>"
+               + "<a:r><a:t>x</a:t></a:r></a:p>";
+
+        static string Bulleted(int level)
+            => $"<a:p><a:pPr lvl=\"{level}\"><a:buChar char=\"\u2022\"/></a:pPr>"
+               + "<a:r><a:t>x</a:t></a:r></a:p>";
+    }
+
+    /// <summary>
+    /// A paragraph that takes its numbering from outside the body continues the outliner's run
+    /// but is not a list item to the importer, so a following item stating its own numbering
+    /// restarts.
+    /// </summary>
+    /// <remarks>
+    /// <c>markParagraph</c> looks at the paragraph's own bullet and then at its body's
+    /// <c>a:lstStyle</c>, never at the layout's or the master's, and treats a paragraph with
+    /// neither as unnumbered.
+    /// </remarks>
+    [Fact]
+    public void NumberingFromOutsideTheBodyDoesNotContinueIntoAStatedList()
+    {
+        XElement inherited = Level("<a:buAutoNum type=\"arabicPeriod\"/>");
+        DrawingTextOptions options = new() { InheritedLevelProperties = _ => [inherited] };
+
+        XElement body = Parse(
+            Plain() + Plain() + "<a:p><a:pPr><a:buAutoNum type=\"arabicPeriod\"/></a:pPr>"
+                              + "<a:r><a:t>x</a:t></a:r></a:p>");
+
+        Read(body, options).Select(p => p.ListMarker).ShouldBe(["1.", "2.", "1."]);
+
+        static string Plain() => "<a:p><a:r><a:t>x</a:t></a:r></a:p>";
+    }
+
     [Fact]
     public void AnEmptyParagraphDrawsNoMarkerAndConsumesNoNumber()
     {

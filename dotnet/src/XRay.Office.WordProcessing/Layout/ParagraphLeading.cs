@@ -74,9 +74,11 @@ internal static class ParagraphLeading
     /// runs vary in size, hands down more.
     /// </remarks>
     public static Length Below(LaidOutParagraph? paragraph, LineSpacingRule spacing)
-        => RaisesEveryLine(spacing) || paragraph is not { Lines.Count: > 0 }
-            ? Length.Zero
-            : paragraph.Lines[^1].SpaceAbove;
+        => paragraph?.LeadingBelow is { } stated
+            ? stated
+            : RaisesEveryLine(spacing) || paragraph is not { Lines.Count: > 0 }
+                ? Length.Zero
+                : paragraph.Lines[^1].SpaceAbove;
 
     /// <summary>
     /// Whether the space above this paragraph's text belongs to the line rather than to the boundary.

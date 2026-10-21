@@ -137,8 +137,9 @@ internal sealed class PptxTextStyles
     /// </summary>
     /// <remarks>
     /// Empty for a shape that is not a placeholder. See <see cref="PptxTextBody"/> for why the
-    /// body properties inherit at all — a slide's <c>&lt;a:bodyPr/&gt;</c> is silence, not an
-    /// instruction, and PowerPoint writes one on every placeholder it has not re-formatted.
+    /// body properties inherit at all — a slide's <c>&lt;a:bodyPr/&gt;</c> is silence about its
+    /// anchor and insets, and PowerPoint writes one on every placeholder it has not re-formatted.
+    /// It is not silence about the wrap and the autofit, which 26.x resets on every a:bodyPr.
     /// </remarks>
     /// <param name="shape">The shape whose text body is being read.</param>
     public XElement?[] BodyPropertiesFor(XElement shape)
@@ -154,6 +155,73 @@ internal sealed class PptxTextStyles
             Drawing.Child(Ppt.Child(direct, "txBody"), "bodyPr"),
             Drawing.Child(Ppt.Child(inherited, "txBody"), "bodyPr"),
         ];
+    }
+
+    /// <summary>
+    /// Whether LibreOffice imports the shape as a presentation object — an outliner text frame —
+    /// rather than as a custom shape, which decides whether <c>a:bodyPr/@wrap="none"</c> means
+    /// anything.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>PPTShape::addShape</c> (<c>oox/source/ppt/pptshape.cxx:255-415</c> at tag 26.8.1.1)
+    /// gives a title or centred title a <c>TitleTextShape</c>, a subtitle a <c>SubtitleShape</c>,
+    /// a body or object placeholder an <c>OutlinerShape</c> and a header, date, footer or slide
+    /// number its own presentation shape; every other <c>p:sp</c> is a
+    /// <c>com.sun.star.drawing.CustomShape</c>. The body, object, date, footer and slide-number
+    /// placeholders fall back to a custom shape when their geometry is not a rectangle
+    /// (<c>:401-415</c>, <c>CustomShapeProperties::representsDefaultShape</c>), because a
+    /// presentation object has no geometry of its own; a title keeps its frame whatever it says.
+    /// </para>
+    /// <para>
+    /// The distinction matters because <c>TextWordWrap</c> is a custom-shape property only: the
+    /// sole readers of <c>SDRATTR_TEXT_WORDWRAP</c> in <c>svx</c> are <c>SdrObjCustomShape</c>
+    /// and its view contact (<c>svdoashp.cxx</c>, <c>viewcontactofsdrobjcustomshape.cxx</c>). A
+    /// text frame wraps at its width unless it grows sideways, and nothing in the PPTX import
+    /// makes a placeholder grow sideways. Measured on <c>wrap-inherit.pptx</c>,
+    /// <c>wrap-xfrm.pptx</c> and <c>wrap-title.pptx</c>: a body or title placeholder whose own
+    /// <c>a:bodyPr</c> says <c>wrap="none"</c> draws 9 lines in 26.2.4.2 and 26.8.1.1 alike.
+    /// </para>
+    /// <para>
+    /// The geometry is the shape's own and then its placeholders', nearest first, the way
+    /// <c>applyShapeReference</c> copies the custom-shape properties before the slide's
+    /// <c>p:spPr</c> overrides them.
+    /// </para>
+    /// </remarks>
+    /// <param name="shape">The shape whose text body is being read.</param>
+    public bool IsPresentationTextObject(XElement shape)
+    {
+        ArgumentNullException.ThrowIfNull(shape);
+
+        if (PptxPlaceholder.Read(shape, _master, _layout) is not { } placeholder) return false;
+
+        switch (placeholder.Type)
+        {
+            case "title":
+            case "ctrTitle":
+            case "subTitle":
+            case "hdr":
+                return true;
+            case "body":
+            case "obj":
+            case "dt":
+            case "ftr":
+            case "sldNum":
+                break;
+            default:
+                return false;
+        }
+
+        (XElement? direct, XElement? inherited) = Placeholders(placeholder);
+        foreach (XElement? source in (XElement?[])[shape, direct, inherited])
+        {
+            XElement? properties = Ppt.Child(source, "spPr");
+            if (Drawing.Child(properties, "custGeom") is not null) return false;
+            if (Drawing.Child(properties, "prstGeom") is { } preset)
+                return Drawing.Attribute(preset, "prst") is null or "rect" or "Rect";
+        }
+
+        return true;
     }
 
     /// <summary>

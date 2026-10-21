@@ -1,3 +1,4 @@
+using XRay.Office.Core.Globalization;
 using XRay.Office.Core.Units;
 using XRay.Office.Text.Fonts;
 using XRay.Office.Text.Shaping;
@@ -96,13 +97,19 @@ public sealed class TextMeasurer
 /// past the margin. See <see cref="JustificationShrink"/>.
 /// </para>
 /// </param>
+/// <param name="Hyphenated">
+/// True when the line ends inside a word that automatic hyphenation broke, so a hyphen is drawn after
+/// <paramref name="VisibleEnd"/>. <paramref name="Width"/> includes the hyphen, as Writer's line includes its
+/// <c>SwHyphPortion</c>, so alignment and justification see the line the hyphen ends.
+/// </param>
 public readonly record struct TextLine(
     int Start,
     int End,
     int VisibleEnd,
     Length Width,
     bool EndsParagraph,
-    Length ShrinkAllowance = default)
+    Length ShrinkAllowance = default,
+    bool Hyphenated = false)
 {
     /// <summary>How many characters the line spans, trailing spaces included.</summary>
     public int Length => End - Start;
@@ -241,7 +248,8 @@ public sealed class LineFiller
             measured.WidthBetween,
             tabs,
             widthOfLine,
-            cellBroken);
+            cellBroken,
+            tabs?.Hyphenation is null ? null : measured.HyphenWidthAt);
     }
 
     /// <summary>
@@ -286,6 +294,10 @@ public sealed class LineFiller
             ? ShapedText.Empty
             : _measurer.Shape(text, shaping);
 
+        Length hyphen = tabs?.Hyphenation is null
+            ? Length.Zero
+            : _measurer.Measure("-", emSize, shaping);
+
         return Fill(
             text,
             availableWidth,
@@ -293,7 +305,8 @@ public sealed class LineFiller
             language,
             (from, to) => shaped.WidthBetween(from, to, emSize),
             tabs,
-            widthOfLine);
+            widthOfLine,
+            hyphenWidthAt: tabs?.Hyphenation is null ? null : _ => hyphen);
     }
 
     /// <summary>
@@ -312,7 +325,8 @@ public sealed class LineFiller
         Func<int, int, Length> widthBetween,
         ParagraphFormat? tabs = null,
         Func<int, IReadOnlyList<TextLine>, Length>? widthOfLine = null,
-        IReadOnlyList<CellBrokenSpan>? cellBroken = null)
+        IReadOnlyList<CellBrokenSpan>? cellBroken = null,
+        Func<int, Length>? hyphenWidthAt = null)
     {
         List<TextLine> lines = [];
         if (text.Length == 0)
@@ -344,6 +358,14 @@ public sealed class LineFiller
 
         int lineStart = 0;
         int nextOpportunity = 0;
+
+        // Resolved once: a paragraph whose language has no pattern file is not hyphenated at all, which is
+        // LibreOffice's answer too — `getMatchingDict` finds nothing and `hyphenate` returns null.
+        HyphenationRules? hyphenation = tabs?.Hyphenation;
+        IHyphenator? hyphenator = hyphenation is not null && hyphenWidthAt is not null
+            ? Hyphenators.For(language)
+            : null;
+        int hyphenatedRun = 0;
 
         while (lineStart < text.Length)
         {
@@ -514,9 +536,30 @@ public sealed class LineFiller
                 probe = nextOpportunity;
             }
 
+            // The word that runs past the margin may be hyphenated instead of carried whole to the next
+            // line. See <see cref="Hyphenate"/>.
+            bool hyphenated = false;
+            if (hyphenator is not null && !forceChop
+                && (hyphenation!.MaxConsecutive <= 0 || hyphenatedRun < hyphenation.MaxConsecutive)
+                && hyphenation.NoHyphenationAt?.Contains(lineStart) != true
+                && !(tabEnd < text.Length && chosen == tabEnd)
+                && !mandatory.Contains(chosen)
+                && Hyphenate(
+                       text, lineStart, chosen, chosenVisibleEnd, limit, language, hyphenation, hyphenator,
+                       opportunities, (from, to) => Measure(text, from, to, widthBetween, tabs, lines.Count == 0, limit),
+                       hyphenWidthAt!) is { } broken)
+            {
+                chosen = broken.End;
+                chosenVisibleEnd = broken.End;
+                chosenWidth = broken.Width;
+                chosenAllowance = Length.Zero;
+                probe = nextOpportunity;
+                hyphenated = true;
+            }
+
             // Nothing between this line's start and its first break opportunity fits. The word is
             // chopped rather than left hanging over the margin — see the remarks on this class.
-            if ((forceChop || chosenWidth > limit + chosenAllowance)
+            if (!hyphenated && (forceChop || chosenWidth > limit + chosenAllowance)
                 && Chop(text, lineStart, chopEnd, limit, widthBetween, tabs, lines.Count == 0)
                        is { } cut
                 && cut > lineStart)
@@ -541,13 +584,16 @@ public sealed class LineFiller
                 chosenWidth = Measure(
                     text, lineStart, chosenVisibleEnd, widthBetween, tabs, lines.Count == 0, limit,
                     placed: true);
+                if (hyphenated) chosenWidth += hyphenWidthAt!(chosenVisibleEnd - 1);
             }
 
             lines.Add(new TextLine(
                 lineStart, chosen, chosenVisibleEnd, chosenWidth,
                 EndsParagraph: chosen >= text.Length,
-                ShrinkAllowance: chosenAllowance));
+                ShrinkAllowance: chosenAllowance,
+                Hyphenated: hyphenated));
 
+            hyphenatedRun = hyphenated ? hyphenatedRun + 1 : 0;
             lineStart = chosen;
             nextOpportunity = probe;
         }
@@ -733,6 +779,151 @@ public sealed class LineFiller
     private static bool IsBreakingWhitespace(char character)
         => character is not ('\u00A0' or '\u2007' or '\u202F')
            && (char.IsWhiteSpace(character) || character is >= '\u001C' and <= '\u001F');
+
+    /// <summary>
+    /// Where the word that runs past the margin is hyphenated, and how wide the line then is; or null when
+    /// it is not.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Writer's rule, from <c>SwTextGuess::Guess</c> (<c>sw/source/core/text/guess.cxx</c>:302-420, 652-790)
+    /// and the break iterator it asks (<c>BreakIterator_Unicode::getLineBreak</c>,
+    /// <c>i18npool/source/breakiterator/breakiterator_unicode.cxx</c>:499-537). Only the word holding the
+    /// <em>cut position</em> — the first character that does not fit — is ever hyphenated, and nothing is
+    /// when that character is a blank or starts a word. The hyphenator is told how much of the word may
+    /// stay on the line: everything before the first character that no longer fits once a hyphen is
+    /// appended (<c>nHyphPos</c>). It answers with the last pattern point that leaves at most that much, at
+    /// least the paragraph's leading minimum before it and its trailing minimum after
+    /// (<c>lingucomponent/source/hyphenator/hyphen/hyphenimp.cxx</c>:437-448), and only for a word at least
+    /// the minimum length.
+    /// </para>
+    /// <para>
+    /// The hyphenation zone (<c>guess.cxx</c>:323-400): when a blank lies between the cut position and the
+    /// first character that does not fit in the line less the zone, the line ends at that blank rather than
+    /// being hyphenated — a short gap at the end of a line is better than a hyphen.
+    /// </para>
+    /// </remarks>
+    private static (int End, Length Width)? Hyphenate(
+        string text,
+        int lineStart,
+        int chosen,
+        int chosenVisibleEnd,
+        Length limit,
+        string? language,
+        HyphenationRules rules,
+        IHyphenator hyphenator,
+        IReadOnlyList<int> opportunities,
+        Func<int, int, Length> measure,
+        Func<int, Length> hyphenWidthAt)
+    {
+        // The cut position, as `GetTextBreak` finds it. A chosen line that already overflows is a word
+        // alone on its line, and the cut is inside it.
+        int cut = chosen > lineStart && measure(lineStart, chosenVisibleEnd) <= limit
+            ? chosenVisibleEnd
+            : lineStart;
+        while (cut < text.Length && measure(lineStart, cut + 1) <= limit) cut++;
+
+        if (cut >= text.Length || cut <= lineStart || IsHyphenationBlank(text[cut])) return null;
+
+        // A cut at a break opportunity is a word boundary, and the line ends there unhyphenated.
+        if (Contains(opportunities, cut)) return null;
+
+        // Back over punctuation the cut landed on, to the word it closes.
+        int at = cut;
+        while (at > lineStart && !IsWordCharacter(text, at) && char.IsPunctuation(text[at])) at--;
+        if (!IsWordCharacter(text, at)) return null;
+
+        int wordStart = at;
+        while (wordStart > 0 && IsWordCharacter(text, wordStart - 1)) wordStart--;
+        int wordEnd = at + 1;
+        while (wordEnd < text.Length && IsWordCharacter(text, wordEnd)) wordEnd++;
+
+        string word = text[wordStart..wordEnd];
+        if (word.Length < rules.MinWordLength) return null;
+        if (rules.NoCaps && word.Any(char.IsLetter) && !word.Any(char.IsLower)) return null;
+
+        if (rules.Zone > Length.Zero && InZone(text, lineStart, cut, limit - rules.Zone, measure)) return null;
+
+        // How much of the word fits with a hyphen after it.
+        Length hyphen = hyphenWidthAt(cut);
+        int fitting = lineStart;
+        while (fitting < text.Length && measure(lineStart, fitting + 1) + hyphen <= limit) fitting++;
+        int maxLeading = fitting - wordStart;
+        if (maxLeading <= 0) return null;
+
+        int lead = Math.Max(rules.MinLeading, 2);
+        int best = -1;
+        foreach (int point in hyphenator.FindHyphenationPoints(word, language ?? Hyphenators.DefaultLanguage))
+        {
+            if (point < lead || word.Length - point < rules.MinTrailing || point > maxLeading) continue;
+            if (wordStart + point <= lineStart) continue;
+            best = Math.Max(best, point);
+        }
+
+        if (best < 0) return null;
+
+        int end = wordStart + best;
+        return (end, measure(lineStart, end) + hyphenWidthAt(end - 1));
+    }
+
+    /// <summary>
+    /// True when a blank lies between the cut position and where text stops fitting in the line less its
+    /// hyphenation zone, which is what makes the line end at that blank instead.
+    /// </summary>
+    private static bool InZone(
+        string text, int lineStart, int cut, Length zoneLimit, Func<int, int, Length> measure)
+    {
+        int zone = lineStart;
+        if (zoneLimit > Length.Zero)
+        {
+            while (zone < text.Length && measure(lineStart, zone + 1) <= zoneLimit) zone++;
+        }
+
+        for (int at = cut; at >= lineStart && at >= zone; at--)
+        {
+            if (IsHyphenationBlank(text[at])) return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>The three blanks Writer's guess treats as one: space, ideographic space, six-per-em.</summary>
+    private static bool IsHyphenationBlank(char c) => c is ' ' or '\u3000' or '\u2006';
+
+    /// <summary>
+    /// True for a character inside a dictionary word: a letter, a digit or a mark, or an apostrophe with a
+    /// letter on each side — ICU's dictionary-word boundary keeps <c>don't</c> whole and stops at a hyphen.
+    /// </summary>
+    private static bool IsWordCharacter(string text, int at)
+    {
+        if (at < 0 || at >= text.Length) return false;
+
+        char c = text[at];
+        if (char.IsLetterOrDigit(c)) return true;
+
+        System.Globalization.UnicodeCategory category = char.GetUnicodeCategory(c);
+        if (category is System.Globalization.UnicodeCategory.NonSpacingMark
+            or System.Globalization.UnicodeCategory.SpacingCombiningMark) return true;
+
+        return c is '\'' or '\u2019'
+               && at > 0 && at + 1 < text.Length
+               && char.IsLetter(text[at - 1]) && char.IsLetter(text[at + 1]);
+    }
+
+    private static bool Contains(IReadOnlyList<int> sorted, int value)
+    {
+        int low = 0;
+        int high = sorted.Count - 1;
+        while (low <= high)
+        {
+            int middle = (low + high) >> 1;
+            if (sorted[middle] == value) return true;
+            if (sorted[middle] < value) low = middle + 1;
+            else high = middle - 1;
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Where to cut a word that does not fit the line it starts, or null to leave it alone.

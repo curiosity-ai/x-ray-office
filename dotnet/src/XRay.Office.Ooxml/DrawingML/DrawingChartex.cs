@@ -38,6 +38,22 @@ namespace XRay.Office.Ooxml.DrawingML;
 /// on the page that the reference does not have.
 /// </para>
 /// <para>
+/// <strong>This is 26.2.4.2's drawing, and 26.8.1.1 no longer draws chartex this way.</strong>
+/// Re-measured on eleven chartex documents from <c>chart2/qa/extras/data</c> and
+/// <c>oox/qa/unit/data</c> (histogram, pareto, funnel, waterfall, treemap, sunburst) through
+/// 26.8.1.1, 26.2.4.2 and this tree: 26.8.1.1 resolves a <c>clusteredColumn</c> series to
+/// <c>loext:class="loext:histogram"</c> — a bar chart with a <c>chart:histogram</c> series,
+/// <c>loext:bin-count</c>/<c>loext:bin-width</c>, binned categories such as <c>[10-13.94]</c> and
+/// <c>(13.94-17.87]</c>, both axes with labels, major gridlines and the title — and draws every
+/// other layout (funnel, waterfall, treemap, sunburst, and a pareto's <c>paretoLine</c>) as the
+/// <c>STR_UNSUPPORTED_CHART_TYPE</c> text "One or more chart types are unsupported in this version
+/// of LibreOffice" over the chart's title, axes and gridlines. On <c>SimpleHistogram.xlsx</c> that
+/// is 64 strokes and 18 text runs where 26.2.4.2 drew 2 and 6 and this reader draws 1 and 5. The
+/// tdf#165742 import steps that do it landed before the 26.8 branch point. Reproducing it is a
+/// port of the histogram chart type's binning and of the chartex axis, title and gridline readers,
+/// and is not done here.
+/// </para>
+/// <para>
 /// <strong>The numbers are in the workbook, never in the part.</strong> A <c>c:</c> chart caches its
 /// points; chartex has a cache element (<c>cx:lvl</c>/<c>cx:pt</c>) but neither corpus witness uses
 /// it — both state a bare <c>cx:f</c> naming a hidden <c>_xlchart.v1.n</c> defined name. The cache

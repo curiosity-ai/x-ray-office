@@ -10,14 +10,21 @@ namespace XRay.Office.Text.Fonts;
 /// <param name="Weight">The weight on the OpenType 1-1000 scale.</param>
 /// <param name="IsItalic">Whether the face is italic or oblique.</param>
 /// <param name="IsFixedPitch">Whether every glyph has the same advance.</param>
+/// <param name="WidthClass">
+/// The <c>OS/2</c> width class, 1 (ultra-condensed) to 9 (ultra-expanded), 5 being normal.
+/// </param>
 public readonly record struct InstalledFace(
     string Path,
     int FaceIndex,
     string FamilyName,
     int Weight,
     bool IsItalic,
-    bool IsFixedPitch)
+    bool IsFixedPitch,
+    int WidthClass = InstalledFace.NormalWidth)
 {
+    /// <summary>The <c>OS/2</c> width class of a face of normal width.</summary>
+    public const int NormalWidth = 5;
+
     /// <summary>A stable key for the face, for caching and for deduplicating embedded fonts.</summary>
     public string FaceKey => FaceIndex == 0 ? Path : $"{Path}#{FaceIndex}";
 
@@ -134,6 +141,13 @@ public sealed class SystemFontIndex
     private readonly Dictionary<string, List<InstalledFace>> _families =
         new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Faces by their legacy (name ID 1) family where it differs from the typographic one, which
+    /// is consulted only for a name no family answers. See <see cref="Add"/>.
+    /// </summary>
+    private readonly Dictionary<string, List<InstalledFace>> _legacyFamilies =
+        new(StringComparer.Ordinal);
+
     private readonly List<Diagnostic> _diagnostics = [];
 
     /// <summary>Every face found, in no particular order.</summary>
@@ -178,10 +192,21 @@ public sealed class SystemFontIndex
     }
 
     /// <summary>The faces of a family, or empty when none is installed under that name.</summary>
+    /// <remarks>
+    /// A family's typographic name answers first; a legacy (name ID 1) name answers only a request
+    /// no typographic family answers, so <c>Inter Light</c> finds Inter's light faces while
+    /// <c>Inter</c> still finds the whole family.
+    /// </remarks>
     public IReadOnlyList<InstalledFace> Family(string? familyName)
-        => _families.TryGetValue(FontSubstitutions.Normalise(familyName), out List<InstalledFace>? faces)
+    {
+        string key = FontSubstitutions.Normalise(familyName);
+
+        return _families.TryGetValue(key, out List<InstalledFace>? faces)
             ? faces
-            : [];
+            : _legacyFamilies.TryGetValue(key, out List<InstalledFace>? legacy)
+                ? legacy
+                : [];
+    }
 
     /// <summary>True when a family is installed.</summary>
     public bool Has(string? familyName) => Family(familyName).Count > 0;
@@ -250,18 +275,61 @@ public sealed class SystemFontIndex
                 path, index, family,
                 OpenTypeFace.WeightOf(os2, head),
                 OpenTypeFace.IsItalicOf(os2, head, post),
-                post.IsFixedPitch);
+                post.IsFixedPitch,
+                os2?.WidthClass is >= 1 and <= 9 ? os2.Value.WidthClass : InstalledFace.NormalWidth);
 
-            if (!_families.TryGetValue(installed.NormalisedFamily, out List<InstalledFace>? list))
+            Register(_families, installed);
+
+            // The legacy family name, name ID 1, as a lookup alias. LibreOffice registers every one
+            // a face carries (`PhysicalFontCollection::Add` through `PhysicalFontFace::GetAliases`),
+            // and fontconfig lists it beside the typographic one, so a document asking for
+            // `Inter Light` gets Inter's light face: measured on 26.8.1.1 with
+            // `probes/calc-anchor-r26/cff.fodt`, which embeds `Inter-Light` where this tree drew
+            // DejaVu Sans.
+            if (NameTable.Read(file, NameTable.FamilyId) is { Length: > 0 } legacy
+                && FontSubstitutions.Normalise(legacy) != installed.NormalisedFamily)
             {
-                list = [];
-                _families[installed.NormalisedFamily] = list;
+                Register(_legacyFamilies, installed with { FamilyName = legacy });
             }
+        }
+    }
 
-            // The same family may be installed twice — a system copy and a user copy — and the first
-            // directory searched wins, since that is the one a user expects.
-            if (!list.Any(f => f.Weight == installed.Weight && f.IsItalic == installed.IsItalic))
-                list.Add(installed);
+    /// <summary>Files a face under its family, keeping one face per weight and slant.</summary>
+    /// <remarks>
+    /// <para>
+    /// The same family may be installed twice — a system copy and a user copy — and the first
+    /// directory searched wins, since that is the one a user expects.
+    /// </para>
+    /// <para>
+    /// <strong>Except that a face of normal width beats a narrower or wider one</strong> of the same
+    /// weight and slant. <c>DejaVu Sans Condensed</c>'s typographic family is <c>DejaVu Sans</c>, so
+    /// the two shared a slot and whichever file was enumerated first answered every
+    /// <c>DejaVu Sans</c> request. LibreOffice prefers the normal width when a request names none
+    /// (<c>PreferNormalFontWidthMatchValue</c>), and fontconfig's default pattern asks for width
+    /// 100: measured on 26.8.1.1 with the eight condensed faces added to a fontconfig directory,
+    /// <c>DejaVu Sans</c> draws in DejaVu Sans and <c>DejaVu Sans Condensed</c> in the condensed
+    /// face, where this tree drew the condensed face for both.
+    /// </para>
+    /// </remarks>
+    private static void Register(Dictionary<string, List<InstalledFace>> families, InstalledFace face)
+    {
+        if (!families.TryGetValue(face.NormalisedFamily, out List<InstalledFace>? list))
+        {
+            list = [];
+            families[face.NormalisedFamily] = list;
+        }
+
+        int at = list.FindIndex(f => f.Weight == face.Weight && f.IsItalic == face.IsItalic);
+        if (at < 0)
+        {
+            list.Add(face);
+            return;
+        }
+
+        if (Math.Abs(face.WidthClass - InstalledFace.NormalWidth)
+            < Math.Abs(list[at].WidthClass - InstalledFace.NormalWidth))
+        {
+            list[at] = face;
         }
     }
 
@@ -885,9 +953,20 @@ public sealed class SystemFontResolver : IFontResolver, IGlyphFallbackResolver
             };
         }
 
+        // A list, `A;B`, which is what an ODF reader hands over for a CSS-style family list.
+        if (request.FamilyName is { } names && names.Contains(';', StringComparison.Ordinal))
+            return ResolveList(request);
+
         // The requested family, if it is here.
         if (_index.Best(request.FamilyName, request.Weight, request.IsItalic) is { } exact)
             return Reference(request, exact, requested: request.FamilyName);
+
+        // Its name without a script suffix: `Times New Roman CYR`. See `StripScript`.
+        if (StripScript(request.FamilyName) is { } stripped
+            && _index.Best(stripped, request.Weight, request.IsItalic) is { } unsuffixed)
+        {
+            return Reference(request, unsuffixed, requested: request.FamilyName);
+        }
 
         // A family fontconfig files under `math` is answered by the orthography, not by a shape,
         // and that beats the document's own declaration. See MathFace.
@@ -988,6 +1067,135 @@ public sealed class SystemFontResolver : IFontResolver, IGlyphFallbackResolver
         Record(request, last);
         return Reference(request, last, requested: request.FamilyName);
     }
+
+    /// <summary>Resolves a <c>;</c>-separated family list, token by token.</summary>
+    /// <remarks>
+    /// <para>
+    /// <c>PhysicalFontCollection::FindFontFamily</c> in 26.8.1.1 (tdf#108243, ecd293dd31aa) tries
+    /// each token in order — the name as an installed family, then its metric-compatible
+    /// replacement (<c>aMetricCompatibleMap</c>, followed transitively), then the name with a
+    /// script suffix stripped — and asks the fontconfig pre-match hook only when
+    /// <c>nTokenPos == -1</c>, i.e. for the <em>last</em> token. Before that commit the hook answered
+    /// for the first missing token, and fontconfig always answers, so a later token was never
+    /// reached. So everything but the last token is tried for an exact face here, and the last
+    /// one goes through the whole of the single-name resolution — which is the hook's model —
+    /// keeping the request's declared class and pitch.
+    /// </para>
+    /// <para>
+    /// Measured on 26.8.1.1 with nine two- and three-family lists in a flat ODT
+    /// (<c>probes/calc-anchor-r26/fontlist.fodt</c>), faces read out of the PDF:
+    /// <c>NoSuchFontA, Liberation Mono</c> draws Liberation Mono (26.2.4.2: DejaVu Sans),
+    /// <c>NoSuchFontA, Calibri</c> Carlito, <c>Liberation Serif Greek, Liberation Mono</c>
+    /// Liberation Serif, <c>NoSuchFontA, Courier</c> Liberation Mono — fontconfig's answer for the
+    /// last token — and two missing families declared roman DejaVu Serif.
+    /// </para>
+    /// </remarks>
+    private FontReference ResolveList(FontRequest request)
+    {
+        string[] tokens = request.FamilyName
+            .Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+
+        if (tokens.Length == 0) return Resolve(request with { FamilyName = string.Empty });
+
+        for (int at = 0; at < tokens.Length - 1; at++)
+        {
+            string token = tokens[at];
+            if (Installed(token) is { } face)
+                return Reference(request with { FamilyName = token }, face, requested: token);
+        }
+
+        return Resolve(request with { FamilyName = tokens[^1] });
+
+        InstalledFace? Installed(string token)
+        {
+            if (_index.Best(token, request.Weight, request.IsItalic) is { } exact) return exact;
+
+            // `FindMetricCompatibleFont` follows the map until nothing more matches, so a
+            // BundesSans request goes Calibri and then Carlito.
+            string current = token;
+            for (int guard = 0; guard < MetricCompatible.Length; guard++)
+            {
+                string? next = null;
+                foreach ((string font, string compatible) in MetricCompatible)
+                {
+                    if (FontSubstitutions.Normalise(font) != FontSubstitutions.Normalise(current))
+                        continue;
+
+                    next = compatible;
+                    break;
+                }
+
+                if (next is null) break;
+                if (_index.Best(next, request.Weight, request.IsItalic) is { } compatibleFace)
+                    return compatibleFace;
+
+                current = next;
+            }
+
+            return StripScript(token) is { } stripped
+                ? _index.Best(stripped, request.Weight, request.IsItalic)
+                : null;
+        }
+    }
+
+    /// <summary>
+    /// <c>aMetricCompatibleMap</c> (<c>vcl/source/font/PhysicalFontCollection.cxx</c>:976-993 in
+    /// 26.8.1.1), in its own order.
+    /// </summary>
+    private static readonly (string Font, string Compatible)[] MetricCompatible =
+    [
+        ("Times New Roman", "Liberation Serif"),
+        ("Arial", "Liberation Sans"),
+        ("Arial Narrow", "Liberation Sans Narrow"),
+        ("Courier New", "Liberation Mono"),
+        ("Cambria", "Caladea"),
+        ("Calibri", "Carlito"),
+        ("BundesSans", "Calibri"),
+        ("BundesSans Office", "Calibri"),
+        ("BundesSans Regular", "Calibri"),
+        ("BundesSerif", "Cambria"),
+        ("BundesSerif Office", "Cambria"),
+        ("BundesSerif Regular", "Cambria"),
+    ];
+
+    /// <summary>
+    /// A family name with the script suffixes Windows 3.1 and 95 put into font names removed, or null
+    /// when it carries none.
+    /// </summary>
+    /// <remarks>
+    /// <c>StripScriptFromName</c> (<c>unotools/source/misc/fontdefs.cxx</c>:29-60, fdo#49271):
+    /// <c> baltic</c>, <c> ce</c>, <c> cyr</c>, <c> greek</c>, <c> tur</c> and the four
+    /// parenthesised ones, case-insensitively and repeatedly, so <c>Times New Roman CYR Greek</c>
+    /// is <c>Times New Roman</c>. <c>FindFontFamily</c> tries the result for an installed family
+    /// before it consults fontconfig, for every token of a list and for a single name alike.
+    /// </remarks>
+    /// <param name="familyName">The requested family.</param>
+    public static string? StripScript(string? familyName)
+    {
+        if (string.IsNullOrEmpty(familyName)) return null;
+
+        string name = familyName;
+        bool stripped = true;
+        while (stripped)
+        {
+            stripped = false;
+            foreach (string suffix in ScriptSuffixes)
+            {
+                if (!name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) continue;
+
+                name = name[..^suffix.Length];
+                stripped = true;
+            }
+        }
+
+        return name.Length == familyName.Length || name.Length == 0 ? null : name;
+    }
+
+    private static readonly string[] ScriptSuffixes =
+    [
+        " baltic", " ce", " cyr", " greek", " tur",
+        " (arabic)", " (hebrew)", " (thai)", " (vietnamese)",
+    ];
 
     /// <inheritdoc/>
     public IFontFace LoadFace(FontReference reference)

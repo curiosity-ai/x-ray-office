@@ -246,42 +246,42 @@ public sealed class PdfFontTests
     }
 
     /// <summary>
-    /// A CFF-flavoured face is named and not embedded, rather than embedded as a TrueType one.
+    /// A CFF-flavoured face is embedded, as a composite font over its bare <c>CFF </c> table.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// A <c>/FontFile2</c> promises <c>glyf</c> outlines and a reader that believes it and finds
-    /// <c>OTTO</c> is entitled to stop. Poppler does: on <c>16 - UTM - (NASA).pptx</c> it
-    /// reported *"Mismatch between font type and embedded font file"* and then *"No font in
-    /// show"* 161 times, leaving 161 glyph runs blank on a document whose page count, word count
-    /// and <c>pdffonts</c> embedding check all passed. So the assertion here is that the file
-    /// does <em>not</em> claim a TrueType program for a face that has none.
-    /// </para>
-    /// <para>
-    /// The mechanism was not what the key alone suggested. Correcting it to
-    /// <c>/FontFile3 /Subtype /OpenType</c> under a <c>/Type1</c> dictionary — which is what PDF
-    /// 1.7 §9.9 asks for — makes poppler accept the file and still draw nothing useful: a Type1
-    /// dictionary selects glyphs by <em>name</em> through the CFF charset, and our codes are
-    /// glyph indices, so an 18 pt Loma probe came back as a row of tofu boxes. Embedding one
-    /// properly needs a <c>/Differences</c> name encoding, and a CID-keyed CFF needs a composite
-    /// <c>/Type0</c> font on top of that. Until then, naming the face without embedding it is the
-    /// one option that puts real words on the page.
+    /// It used to be named and not embedded: a <c>/FontFile2</c> promises <c>glyf</c> outlines
+    /// (poppler: *"Mismatch between font type and embedded font file"*, then nothing drawn), and
+    /// a simple <c>/Type1</c> dictionary selects glyphs by name where our codes are glyph
+    /// indices. 26.8.1.1 embeds every CFF face — <c>pdffonts</c> reports Loma, Inter and Unifont
+    /// as embedded Type 1 in its PDF of <c>probes/calc-anchor-r26/cff.fodt</c> — so this tree now
+    /// does too, in master's shape (be1a60ef339c): <c>/Type0</c> over a <c>CIDFontType0</c>
+    /// with <c>/FontFile3 /Subtype /CIDFontType0C</c>, and a one-byte CMap so the content
+    /// stream is unchanged. <c>pdffonts</c> reports all three as embedded CID Type 0C and
+    /// poppler draws their glyphs.
     /// </para>
     /// </remarks>
     [Fact]
-    public void ACffFlavouredFaceIsNotClaimedToBeTrueType()
+    public void ACffFlavouredFaceIsEmbeddedAsACompositeFont()
     {
         Assert.SkipUnless(TestCffFace.IsAvailable, "no CFF-flavoured face on this machine");
 
         PdfFile pdf = Write(TestCffFace.Run("Paperless", new DocPoint(Points(56.7), Points(120)), Points(11)));
 
-        pdf.FontPrograms().ShouldBeEmpty("a CFF face must not be written as a TrueType program");
-        pdf.Text.ShouldNotContain("/FontFile");
+        pdf.Text.ShouldNotContain("/FontFile2", customMessage: "a CFF face is not a TrueType program");
+        pdf.Text.ShouldContain("/Subtype/Type0");
+        pdf.Text.ShouldContain("/Subtype/CIDFontType0/");
+        pdf.Text.ShouldContain("/FontFile3 ");
+        pdf.FontPrograms().ShouldHaveSingleItem().Length.ShouldBeGreaterThan(0);
 
-        // Everything except the outlines survives: the widths are still the face's own, so the
-        // pen positions and the line breaks are the ones layout measured.
-        pdf.Text.ShouldContain("/Widths[");
-        pdf.Text.ShouldContain("/FontDescriptor ");
+        // The encoding is a one-byte CMap, so the run is still two hex digits per glyph.
+        pdf.Text.ShouldContain("<00> <FF>");
+        pdf.Text.ShouldContain("begincidrange");
+        pdf.ContentStreams().Single().ShouldContain("<010203040506040707>Tj");
+
+        // The widths are the face's own, indexed by CID, and the text still extracts.
+        pdf.Text.ShouldContain("/W[");
+        pdf.Text.ShouldContain("/ToUnicode ");
     }
 
     // ------------------------------------------------------------------------- the machinery

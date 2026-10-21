@@ -27,9 +27,11 @@ public sealed class NumberFormatSection
         bool twelveHour,
         bool hasElapsed,
         bool hasUnreproducedDirective,
-        Graphics.Colour? colour)
+        Graphics.Colour? colour,
+        bool isInvalid = false)
     {
         Colour = colour;
+        IsInvalid = isInvalid;
         Code = code;
         _tokens = tokens;
         Kind = kind;
@@ -128,19 +130,36 @@ public sealed class NumberFormatSection
     /// and <c>[Blue]</c> <c>#0000ff</c>.
     /// </para>
     /// <para>
-    /// <strong><c>[COLOR n]</c> is deliberately not resolved</strong> and leaves this null.
+    /// <strong><c>[COLOR n]</c> is resolved against <see cref="StandardPalette"/></strong>.
     /// LibreOffice takes it from <c>GetUserDefColor(n-1)</c>, which Calc wires to
     /// <c>XColorList::CreateStdColorList()</c> (<c>sc/source/core/data/documen9.cxx</c>:246-259)
-    /// — the palette loaded from <c>SvtPathOptions().GetPalettePath()</c>, i.e. the
-    /// <c>share/palette/standard.soc</c> of whichever installation is running, 120 entries and
-    /// user-configurable. Index 9 there is <c>#dddddd</c> "Light Gray 4", which is exactly what
-    /// 26.2.4.2 paints for <c>[Color10]</c>. Reproducing that would mean vendoring one
-    /// installation's UI palette into a document renderer and pinning to it, which is the same
-    /// class of coupling as the bundled-font confound. Corpus reach of the gap is <b>18 cells in
-    /// one document</b>; see <c>probes/numfmtcolour-r139/results.md</c>.
+    /// — the 120 entries of <c>share/palette/standard.soc</c>. Index 9 there is <c>#dddddd</c>
+    /// "Light Gray 4", which is exactly what 26.2.4.2 paints for <c>[Color10]</c>
+    /// (<c>probes/numfmtcolour-r139/results.md</c>, 18 cells in one corpus document). This was
+    /// left unresolved while the palette looked like one installation's UI setting; it became a
+    /// document question in 26.8.1.1, whose ODF importer writes every palette colour a data style
+    /// states as <c>[COLORn]</c> (tdf#146404), and the file is byte-identical in 26.2.4.2 and
+    /// 26.8.1.1. An index outside <c>1..64</c> resolves to nothing, which LibreOffice treats as an
+    /// error in the code — see <see cref="IsInvalid"/>.
     /// </para>
     /// </remarks>
     public Graphics.Colour? Colour { get; }
+
+    /// <summary>
+    /// True when the subformat names a colour LibreOffice cannot resolve, which makes the whole
+    /// format code invalid.
+    /// </summary>
+    /// <remarks>
+    /// <c>ImpSvNumberformatScan::GetColor</c> answers null for a <c>[COLOR n]</c> whose index is
+    /// outside <c>1..64</c> (<c>svl/source/numbers/zforscan.cxx</c>:631-637), and
+    /// <c>SvNumberformat</c>'s constructor then cancels the parse at that bracket
+    /// (<c>zformat.cxx</c>:906-920). The code is not inserted and the cell keeps the standard
+    /// format. Measured on 26.8.1.1 with ODF data styles stating <c>#3465a4</c> and
+    /// <c>#342a06</c> — palette entries 81 and 120: both cells print <c>General</c>
+    /// (<c>1001.5</c>) in black where the same style stating entry 21 prints <c>1000.500</c> in
+    /// its colour.
+    /// </remarks>
+    public bool IsInvalid { get; }
 
     /// <summary>The tokens, for the renderer.</summary>
     internal IReadOnlyList<FormatToken> Tokens => _tokens;
@@ -168,6 +187,7 @@ public sealed class NumberFormatSection
         bool hasElapsed = false;
         bool unreproduced = false;
         Graphics.Colour? colour = null;
+        bool invalid = false;
 
         for (int i = 0; i < code.Length;)
         {
@@ -248,8 +268,20 @@ public sealed class NumberFormatSection
                         // rather than an override.
                         colour ??= named;
                     }
-                    // Anything else — [ENG], [COLOR n] — changes appearance rather than the
-                    // text this extracts, or needs a palette this does not have.
+                    else if (PaletteIndex(body) is { } index)
+                    {
+                        if (index is >= 1 and <= StandardPalette.MaxFormatIndex
+                            && StandardPalette.At(index - 1) is { } rgb)
+                        {
+                            colour ??= Graphics.Colour.FromRgb(rgb);
+                        }
+                        else
+                        {
+                            invalid = true;
+                        }
+                    }
+                    // Anything else — [ENG] — changes appearance rather than the text this
+                    // extracts.
                     continue;
                 }
 
@@ -378,7 +410,30 @@ public sealed class NumberFormatSection
 
         return new NumberFormatSection(
             code, tokens, kind, condition, percents, thousandScale,
-            hasDate, hasTime, twelveHour, hasElapsed, unreproduced, colour);
+            hasDate, hasTime, twelveHour, hasElapsed, unreproduced, colour, invalid);
+    }
+
+    /// <summary>
+    /// The <c>n</c> of a <c>[COLOR n]</c> bracket, or null when the bracket is not one.
+    /// </summary>
+    /// <remarks>
+    /// <c>GetColor</c> upper-cases the word, takes what follows <c>COLOR</c>, strips blanks and
+    /// reads it only when it is all ASCII digits (<c>zforscan.cxx</c>:612-637), so
+    /// <c>[Color10]</c>, <c>[COLOR 10]</c> and <c>[color10]</c> are one colour.
+    /// </remarks>
+    private static int? PaletteIndex(string body)
+    {
+        if (!body.StartsWith("COLOR", StringComparison.OrdinalIgnoreCase)) return null;
+
+        string digits = body[5..].Trim(' ');
+        if (digits.Length == 0 || digits.Length > 9) return null;
+
+        foreach (char c in digits)
+        {
+            if (c is < '0' or > '9') return null;
+        }
+
+        return int.Parse(digits, System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <summary>

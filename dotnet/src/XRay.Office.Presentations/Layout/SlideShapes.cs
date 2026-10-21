@@ -192,6 +192,12 @@ public sealed record PlacedShape
     /// <summary>The drop shadow it casts, or null when it casts none.</summary>
     public SlideShadow? Shadow { get; init; }
 
+    /// <summary>The glow around it, or null when it has none. See <see cref="SlideEffects"/>.</summary>
+    public SlideGlow? Glow { get; init; }
+
+    /// <summary>The soft edge it fades out over, or null when it has none.</summary>
+    public SlideSoftEdge? SoftEdge { get; init; }
+
     private readonly GraphicsPath? _fillOutline;
     private readonly GraphicsPath? _strokeOutline;
 }
@@ -351,5 +357,13 @@ public sealed record PlacedText(
 /// them. They are filled rectangles rather than strokes so their thickness is exact, which is
 /// what the spreadsheet layer does with the same metrics.
 /// </remarks>
+/// <param name="UnderlineColour">
+/// The colour of the underline, when the run states one of its own, or null for
+/// <paramref name="Colour"/>. When it is set the run is underlined and the underline is the
+/// first of <paramref name="Rules"/>.
+/// </param>
 public readonly record struct PlacedGlyphRun(
-    GlyphRun Run, Colour Colour, IReadOnlyList<DocRect>? Rules = null);
+    GlyphRun Run,
+    Colour Colour,
+    IReadOnlyList<DocRect>? Rules = null,
+    Colour? UnderlineColour = null);

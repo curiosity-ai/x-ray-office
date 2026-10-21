@@ -107,4 +107,22 @@ public sealed class XlsConditionalFormatTests
         sheet.Formats.At(2, 0).FontWeight.ShouldBe(400, "A3 matched nothing");
         sheet.Formats.At(1, 1).FontWeight.ShouldBe(400, "B2's rule states a fill and no font");
     }
+
+    /// <summary>
+    /// A sheet that states no decoration of its own still gets a formatting object of its own.
+    /// </summary>
+    /// <remarks>
+    /// The BIFF reader handed the conditional rules the shared <see cref="SheetFormatting.Empty"/>
+    /// whenever a sheet stated no cell decoration, and the rules wrote their fills into it — so
+    /// every sheet of every workbook read afterwards in the process carried this fixture's red
+    /// cells. It surfaced as an order-dependent test failure, two 48 x 15 pt red fills on an
+    /// unrelated <c>.xlsx</c>.
+    /// </remarks>
+    [Fact]
+    public void AConditionalFillNeverReachesTheSharedEmptyFormatting()
+    {
+        _ = Sheet("sheet-cond-format-xls.xls");
+
+        SheetFormatting.Empty.IsEmpty.ShouldBeTrue();
+    }
 }

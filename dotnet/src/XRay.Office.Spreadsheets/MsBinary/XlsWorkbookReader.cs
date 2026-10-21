@@ -1303,6 +1303,13 @@ internal sealed class XlsWorkbookReader
         SheetCellFormats formats = BuildFormats(builder);
         if (!_conditionalFormats.IsEmpty)
         {
+            // `Resolve` answers the shared `SheetFormatting.Empty` for a sheet that states no
+            // decoration, and the rules below write into what they are given. Writing into the
+            // singleton painted this sheet's conditional fills on every sheet of every workbook
+            // read afterwards in the process — seen as two stray 48 x 15 pt red cells on an
+            // unrelated xlsx in the test run, whenever `sheet-cond-format-xls.xls` was read first.
+            if (ReferenceEquals(formatting, SheetFormatting.Empty)) formatting = new SheetFormatting();
+
             formats = formats.WithConditionalText(
                 _conditionalFormats.Apply(formatting, builder.ConditionCells()));
         }

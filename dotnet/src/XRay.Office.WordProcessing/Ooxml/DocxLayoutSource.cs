@@ -57,7 +57,16 @@ public sealed partial class DocxLayoutSource
     private readonly WordStyles _styles;
     private readonly SystemFontResolver _fonts;
     private readonly Length _defaultTabInterval;
+
+    /// <summary>Whether the document states <c>w:ulTrailSpace</c>; see <see cref="PageParagraph.DecoratesTrailingBlank"/>.</summary>
+    private readonly bool _underlinesTrailingSpace;
+
+    /// <summary>Whether the document states <c>w:adjustLineHeightInTable</c>; see <see cref="TextGridSnap"/>.</summary>
+    private readonly bool _adjustsLineHeightInTable;
     private readonly int _compatibilityMode;
+
+    /// <summary>The document's automatic hyphenation, or null when <c>w:autoHyphenation</c> is off.</summary>
+    private readonly HyphenationRules? _hyphenation;
 
     /// <summary>What <c>w:beforeAutospacing</c> and <c>w:afterAutospacing</c> stand for here.</summary>
     private readonly Length _autoSpacing;
@@ -148,8 +157,11 @@ public sealed partial class DocxLayoutSource
         _fonts = fonts ?? SystemFontResolver.Build();
         _defaultTabInterval = TabInterval(settings);
         _compatibilityMode = CompatibilityMode(settings);
+        _hyphenation = Hyphenation(settings);
         WordCompatibility compatibility = WordCompatibility.Read(settings);
         _autoSpacing = AutoSpacing(settings, compatibility);
+        _underlinesTrailingSpace = compatibility.UnderlinesTrailingSpace;
+        _adjustsLineHeightInTable = compatibility.AdjustsLineHeightInTable;
         // `AsWordDocument` is the MS_WORD_COMP_GRID_METRICS compatibility flag, which the Word
         // filters set and ODF's does not. See MetricGrid.AsWordDocument.
         _metrics = (compatibility.UsesPrinterMetrics ? MetricGrid.Printer : MetricGrid.Reference)
@@ -354,6 +366,7 @@ public sealed partial class DocxLayoutSource
         _pendingBelowTarget = -1;
         _indexFieldDepth = 0;
         _sectionLeftMargins = LeftMargins(body);
+        _sectionGridPitches = GridPitches(body);
 
         // Before the walk, because a REF may name a bookmark the walk has not reached yet -- which in
         // a document whose references point forward is most of them. See `DocxReferenceFields`.
@@ -368,7 +381,23 @@ public sealed partial class DocxLayoutSource
         _numbering.ResetCounters();
 
         List<PageBlock> blocks = [];
-        Walk(body, blocks, depth: 0);
+        _inBody = true;
+        try
+        {
+            Walk(body, blocks, depth: 0);
+        }
+        finally
+        {
+            _inBody = false;
+        }
+
+        SuppressAutoSpacingInLists(blocks);
+
+        // The first-section arm of the rule `SuppressAutoSpacingInShape` ports: the document's first
+        // paragraph takes no HTML auto margin either (`DomainMapper_Impl.cxx`:2461). Measured on an
+        // authored two-paragraph probe, both stating `w:beforeAutospacing="1"`: 26.8.1.1 sets the first
+        // at the top margin, 72.03 pt, and the second 14 pt below its predecessor.
+        SuppressAutoSpacingInShape(blocks);
         ParagraphBorderJoin.Apply(blocks);
         return blocks;
     }
@@ -389,6 +418,7 @@ public sealed partial class DocxLayoutSource
         List<PageBlock> blocks = [];
         Walk(element, blocks, depth: 0);
         DropNestedTableFiller(blocks);
+        SuppressAutoSpacingInLists(blocks);
         SuppressAutoSpacingInCell(blocks);
         ParagraphBorderJoin.Apply(blocks);
         return blocks;
@@ -457,11 +487,8 @@ public sealed partial class DocxLayoutSource
     /// reads the paragraph's numbering rules and leaves the margin alone when it has any.
     /// </para>
     /// <para>
-    /// <b>Not done:</b> the same <c>if</c> in <c>finishParagraph</c> also zeroes the top margin of the
-    /// first paragraph of a <em>shape</em> and of the first paragraph of the document's first section.
-    /// Both are the same rule and both are unimplemented here, because neither was measured — a cell is
-    /// where the corpus showed it, and the other two move the body flow, which is not free to change on
-    /// an argument from symmetry alone.
+    /// The same <c>if</c> in <c>finishParagraph</c> also zeroes the top margin of the first paragraph of
+    /// a <em>shape</em> and of the document's first paragraph, which is <see cref="SuppressAutoSpacingInShape"/>.
     /// </para>
     /// </remarks>
     private void SuppressAutoSpacingInCell(List<PageBlock> blocks)
@@ -482,6 +509,107 @@ public sealed partial class DocxLayoutSource
         {
             blocks[^1] = last with { Format = last.Format with { SpaceAfter = Length.Zero } };
         }
+    }
+
+    /// <summary>
+    /// Drops the HTML auto margin above a shape's first paragraph, and above the document's.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The shape arm of the same <c>if</c> in <c>DomainMapper_Impl::finishParagraph</c> that
+    /// <see cref="SuppressAutoSpacingInCell"/> ports for a cell — <c>GetIsFirstParagraphInShape()</c>
+    /// (<c>sw/source/writerfilter/dmapper/DomainMapper_Impl.cxx</c>:2458-2470) — so a text box's text
+    /// starts at its inset rather than fourteen points below it. A stated <c>w:before</c> survives, as in
+    /// a cell.
+    /// </para>
+    /// <para>
+    /// Measured on <c>textbox.docx</c>, whose 27 boxes' paragraphs state <c>w:beforeAutospacing="1"</c>:
+    /// 26.8.1.1's own flat export gives the first paragraph of each box <c>fo:margin-top="0in"</c>, and
+    /// without it this tree pushed the text of the smaller boxes out of their bottoms.
+    /// </para>
+    /// </remarks>
+    private void SuppressAutoSpacingInShape(List<PageBlock> blocks)
+    {
+        if (blocks.Count > 0 && blocks[0] is PageParagraph first
+            && WordParagraphFormats.IsAutoSpaced(
+                _styles, Word.Child(first.Source as XElement, "pPr"), _tableStyle, before: true))
+        {
+            blocks[0] = first with { Format = first.Format with { SpaceBefore = Length.Zero } };
+        }
+    }
+
+    /// <summary>
+    /// Drops the space between two paragraphs of one list where an auto-spacing statement says Word
+    /// would.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>DomainMapper_Impl::finishParagraph</c>, tdf#133363
+    /// (<c>sw/source/writerfilter/dmapper/DomainMapper_Impl.cxx</c>:2768-2853). For a numbered paragraph
+    /// whose predecessor is numbered by the same list, the paragraph's space before goes to nought when
+    /// it states <c>w:beforeAutospacing="1"</c> itself, or when the predecessor's interop grab bag merely
+    /// <em>holds</em> a <c>ParaTopMarginBeforeAutoSpacing</c> entry and the two share a paragraph style;
+    /// and the predecessor's space after goes to nought when its grab bag holds
+    /// <c>ParaBottomMarginAfterAutoSpacing</c>. The test is on the entry's name and not its value, and
+    /// <c>DomainMapper.cxx</c>:916-936 inserts the entry for <c>w:beforeAutospacing="0"</c> as well — so a
+    /// document whose <c>w:docDefaults</c> state the attribute switched <em>off</em> still has every
+    /// list item's space before removed.
+    /// </para>
+    /// <para>
+    /// Measured on <c>issue_359_list_whitespace.docx</c>, whose defaults say
+    /// <c>w:beforeAutospacing="0" w:afterAutospacing="0"</c> and whose list paragraphs are <c>Body</c>
+    /// with eight points before: 26.8.1.1 sets the first item 8 pt below the subject and every following
+    /// item with no space before; deleting the two attributes from the defaults makes it set them all
+    /// 8 pt apart, which is what this tree did.
+    /// </para>
+    /// <para>
+    /// Which list counts as "the same" is the effective <c>w:numId</c>: a paragraph numbered directly must
+    /// share it, and one numbered through its style needs only a numbered predecessor
+    /// (<c>|| !isNumberingViaRule</c>). The predecessor is the previous block in the same flow, so a table
+    /// or a cell boundary between them stops the rule, as it stops <c>xPreviousParagraph</c>.
+    /// </para>
+    /// </remarks>
+    private void SuppressAutoSpacingInLists(List<PageBlock> blocks)
+    {
+        for (int i = 1; i < blocks.Count; i++)
+        {
+            if (blocks[i] is not PageParagraph current || blocks[i - 1] is not PageParagraph previous) continue;
+
+            XElement? currentProperties = Word.Child(current.Source as XElement, "pPr");
+            XElement? previousProperties = Word.Child(previous.Source as XElement, "pPr");
+
+            if (ResolveNumbering(currentProperties) is not (string currentList, _)) continue;
+            if (ResolveNumbering(previousProperties) is not (string previousList, _)) continue;
+
+            bool direct = Word.Child(Word.Child(currentProperties, "numPr"), "numId") is not null;
+            if (direct && !string.Equals(currentList, previousList, StringComparison.Ordinal)) continue;
+
+            // `bParaAutoBefore` is set by the paragraph's own `w:beforeAutospacing` alone; the grab bag is
+            // the predecessor's, and then only when the two share a paragraph style.
+            bool ownAuto = Word.Attribute(Word.Child(currentProperties, "spacing"), "beforeAutospacing")
+                is { } stated && stated is not ("0" or "false" or "off");
+            bool autoBefore = ownAuto
+                || (WordParagraphFormats.GrabBagStatesAutoSpacing(_styles, previousProperties, before: true)
+                    && string.Equals(
+                        ParagraphStyleOf(currentProperties), ParagraphStyleOf(previousProperties),
+                        StringComparison.Ordinal));
+
+            if (autoBefore && current.Format.SpaceBefore != Length.Zero)
+            {
+                blocks[i] = current with { Format = current.Format with { SpaceBefore = Length.Zero } };
+            }
+
+            if (WordParagraphFormats.GrabBagStatesAutoSpacing(_styles, previousProperties, before: false)
+                && previous.Format.SpaceAfter != Length.Zero)
+            {
+                blocks[i - 1] = previous with { Format = previous.Format with { SpaceAfter = Length.Zero } };
+            }
+        }
+
+        string ParagraphStyleOf(XElement? properties)
+            => Word.Attribute(Word.Child(properties, "pStyle"), "val")
+               ?? _styles.DefaultStyleId(WordStyleType.Paragraph)
+               ?? string.Empty;
     }
 
     /// <summary>
@@ -513,6 +641,7 @@ public sealed partial class DocxLayoutSource
         {
             List<PageBlock> blocks = [];
             Walk(element, blocks, depth: 0);
+            SuppressAutoSpacingInLists(blocks);
             ParagraphBorderJoin.Apply(blocks);
             return blocks;
         }
@@ -554,6 +683,75 @@ public sealed partial class DocxLayoutSource
             .Descendants(Word.Name("sectPr"))
             .Select(section => Twips(Word.Child(section, "pgMar"), "left")
                                ?? PageGeometry.Letter.Margins.Left)];
+
+    /// <summary>
+    /// Each section's text-grid pitch, in the order the body states them, or null for a section without a
+    /// grid.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>w:docGrid</c>, as <c>DomainMapper</c> (<c>sw/source/writerfilter/dmapper/DomainMapper.cxx</c>:1253-1295)
+    /// and <c>SectionPropertyMap::CloseSectionGroup</c> (<c>PropertyMap.cxx</c>:1942-1966, 2034) read it: the
+    /// type <c>default</c> (and an absent type) is no grid; <c>lines</c>, <c>linesAndChars</c> and
+    /// <c>snapToChars</c> all snap lines. The pitch travels through hundredths of a millimetre and back to
+    /// twips, each step rounded, and one outside 1 to 31680 twips is read as 1; a grid whose line count
+    /// would not fit a 16-bit integer is dropped. An absent <c>w:linePitch</c> is that same 1.
+    /// </para>
+    /// <para>
+    /// Only the vertical half: a character grid's widths are not modelled, and nor is the ruby height,
+    /// which a DOCX grid always states as nought.
+    /// </para>
+    /// </remarks>
+    private static List<Length?> GridPitches(XElement body)
+        => [.. body
+            .Descendants(Word.Name("sectPr"))
+            .Where(section => section.Parent is not { } parent || !Word.Is(parent, "sectPrChange"))
+            .Select(GridPitch)];
+
+    private static Length? GridPitch(XElement section)
+    {
+        XElement? grid = Word.Child(section, "docGrid");
+        string? type = Word.Attribute(grid, "type");
+        if (grid is null || type is null or "default") return null;
+        if (type is not ("lines" or "linesAndChars" or "snapToChars")) return null;
+
+        long twips = Word.Integer(Word.Attribute(grid, "linePitch"), out int stated) ? stated : 1;
+        long mm100 = (long)Math.Round(twips * 127.0 / 72.0, MidpointRounding.AwayFromZero);
+        if (mm100 < 1 || mm100 > 31680) mm100 = 1;
+
+        long pitch = Math.Max(1, (long)Math.Round(mm100 * 72.0 / 127.0, MidpointRounding.AwayFromZero));
+        return Length.FromTwips(pitch);
+    }
+
+    /// <summary>The text grid a paragraph being read now snaps to, or null.</summary>
+    /// <remarks>
+    /// Only the body's own paragraphs, the ones Writer's <c>IsInDocBody</c> answers yes for, and only where
+    /// the paragraph's <c>w:snapToGrid</c> — on unless a layer turns it off — says so
+    /// (<c>sw/source/core/text/inftxt.cxx</c>:334). A cell's paragraph snaps only when the document states
+    /// <c>w:adjustLineHeightInTable</c>; otherwise it still counts as snapping for the East Asian height
+    /// but takes no line spacing at all. See <see cref="TextGridSnap"/>.
+    /// </remarks>
+    private TextGridSnap? TextGridOf(XElement? properties)
+    {
+        if (!_inBody || InHeaderFooter || _frameDepth > 0 || _noteDepth > 0) return null;
+        if (_sectionGridPitches.Count == 0) return null;
+        if (_sectionGridPitches[Math.Clamp(_sectionIndex, 0, _sectionGridPitches.Count - 1)] is not { } pitch)
+            return null;
+
+        WordProperty snap = _styles.ResolveParagraphProperty(
+            "snapToGrid",
+            properties,
+            Word.Value(properties, "pStyle") ?? _styles.DefaultStyleId(WordStyleType.Paragraph));
+        if (snap.HasValue && !snap.IsOn) return null;
+
+        return new TextGridSnap(pitch, _tableDepth == 0 || _adjustsLineHeightInTable);
+    }
+
+    /// <summary>True while <see cref="Read"/> walks the body, for <see cref="TextGridOf"/>.</summary>
+    private bool _inBody;
+
+    /// <summary>Each section's grid pitch; see <see cref="GridPitches"/>.</summary>
+    private List<Length?> _sectionGridPitches = [];
 
     /// <summary>
     /// The left margin of the section the walk is in, for a page-anchored table's offset.
@@ -912,7 +1110,7 @@ public sealed partial class DocxLayoutSource
         ParagraphFormat format =
             WordParagraphFormats.Resolve(
                 _styles, properties, _defaultTabInterval, _autoSpacing, _tableStyle,
-                _compatibilityMode >= 15);
+                _compatibilityMode >= 15, _hyphenation);
 
         // After the walk, because reading a note body or a text box re-enters this method and a list
         // counter advanced from inside a nested flow would number the paragraph after it wrongly.
@@ -943,14 +1141,17 @@ public sealed partial class DocxLayoutSource
             Colour = text.Colour ?? Colour.Transparent,
             Shading = ShadeColour(WordParagraphFormats.ShadingOf(_styles, properties)),
             Borders = ParagraphBorders(properties),
-            Format = breaksPage || walker.BreaksPageHere
+            Format = (breaksPage || walker.BreaksPageHere
                 ? format with { StartsNewPage = true }
-                : format,
+                : format) with { TextGrid = TextGridOf(properties) },
             Label = label,
 
             // #i3952#: a tab or a run of spaces does not raise a line's height in a Word document, and a
             // DOCX imports with the setting on. See PageParagraph.BlanksAreTransparentToHeight.
             BlanksAreTransparentToHeight = true,
+
+            // `w:ulTrailSpace`. See PageParagraph.DecoratesTrailingBlank.
+            DecoratesTrailingBlank = _underlinesTrailingSpace,
 
             // A toggle in the schema, so `<w:suppressLineNumbers/>` and `w:val="1"` both mean on and
             // `w:val="0"` — which a style commonly writes to undo an inherited one — means off.
@@ -1636,7 +1837,9 @@ public sealed partial class DocxLayoutSource
             _frameDepth++;
             try
             {
-                return ReadFlow(box);
+                List<PageBlock> blocks = ReadFlow(box);
+                SuppressAutoSpacingInShape(blocks);
+                return blocks;
             }
             finally
             {
@@ -3036,15 +3239,30 @@ public sealed partial class DocxLayoutSource
     /// The document's default tab interval.
     /// </summary>
     /// <remarks>
-    /// Half an inch when the document does not say, which is what Word uses. A zero would make a tab
-    /// advance nowhere, so it is treated as absent rather than honoured.
+    /// <para>
+    /// Half an inch when the document does not say, which is what Word uses.
+    /// </para>
+    /// <para>
+    /// <strong>A stated zero is one hundredth of a millimetre</strong>, which is 26.8.1.1's tdf#168607
+    /// (backport 9170e1487ea3): <c>DomainMapper_Impl::ApplySettingsTable</c> writes
+    /// <c>nDefTab ? nDefTab : 1</c> into <c>TabStopDistance</c>, because Writer refuses a zero and Word
+    /// means "no default stops" by it. So a tab with no stop of its own advances to the next hundredth of
+    /// a millimetre and the text after it all but touches the text before. Measured on an authored
+    /// <c>Alpha⇥Bravo⇥Charlie</c>: 26.8.1.1 draws one word at 72.1 pt, where 26.2.4.2 drew the three
+    /// 709 twips apart and this tree 720.
+    /// </para>
     /// </remarks>
     private static Length TabInterval(XElement? settings)
-        => Word.Attribute(Word.Child(settings, "defaultTabStop"), "val") is { } text
-           && Word.Long(text, out long twips)
-           && twips > 0
-            ? Length.FromTwips(twips)
-            : Length.FromTwips(720);
+    {
+        if (Word.Attribute(Word.Child(settings, "defaultTabStop"), "val") is not { } text
+            || !Word.Long(text, out long twips)
+            || twips < 0)
+        {
+            return Length.FromTwips(720);
+        }
+
+        return twips == 0 ? Length.FromMm100(1) : Length.FromTwips(twips);
+    }
 
     /// <summary>
     /// Which version of Word wrote the file, from <c>w:compat</c>, or <c>-1</c> when it does not say.
@@ -3064,23 +3282,69 @@ public sealed partial class DocxLayoutSource
     /// </para>
     /// </remarks>
     private static int CompatibilityMode(XElement? settings)
+        => CompatSetting(settings, "compatibilityMode") is { } text
+           && int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int mode)
+            ? mode
+            : -1;
+
+    /// <summary>
+    /// The document's automatic hyphenation, as writerfilter puts it on the default paragraph style.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>SettingsTable::ApplyProperties</c> (<c>sw/source/writerfilter/dmapper/SettingsTable.cxx</c>:750-786):
+    /// <c>w:autoHyphenation</c> turns <c>ParaIsHyphenation</c> on, <c>w:doNotHyphenateCaps</c> sets no-caps,
+    /// <c>w:hyphenationZone</c> the zone — 360 twips, Word's quarter inch, when the file states none
+    /// (<c>:103</c>) — and <c>w:consecutiveHyphenLimit</c> the most hyphenated lines in a row. Hyphenation-keep
+    /// with keep-line is on unless the <c>allowHyphenationAtTrackBottom</c> compatibility setting says
+    /// otherwise (<c>:591-606</c>); <c>useWord2013TrackBottomHyphenation</c> asks for the whole line to move
+    /// instead, which is not modelled, so that case keeps nothing.
+    /// </para>
+    /// <para>
+    /// A paragraph takes it unless its <c>w:suppressAutoHyphens</c> says otherwise — see
+    /// <see cref="WordParagraphFormats.Resolve"/>.
+    /// </para>
+    /// </remarks>
+    private static HyphenationRules? Hyphenation(XElement? settings)
+    {
+        if (!Word.IsOn(Word.Child(settings, "autoHyphenation"))) return null;
+
+        int zone = int.TryParse(
+            Word.Attribute(Word.Child(settings, "hyphenationZone"), "val"),
+            NumberStyles.Integer, CultureInfo.InvariantCulture, out int stated) && stated > 0
+            ? stated
+            : 360;
+        int consecutive = int.TryParse(
+            Word.Attribute(Word.Child(settings, "consecutiveHyphenLimit"), "val"),
+            NumberStyles.Integer, CultureInfo.InvariantCulture, out int limit) && limit > 0
+            ? limit
+            : 0;
+
+        bool keep = CompatSetting(settings, "allowHyphenationAtTrackBottom") is not ("1" or "true" or "on");
+        bool keepLine = keep
+                        && CompatSetting(settings, "useWord2013TrackBottomHyphenation") is not ("1" or "true" or "on");
+
+        return new HyphenationRules(
+            Zone: Length.FromTwips(zone),
+            NoCaps: Word.IsOn(Word.Child(settings, "doNotHyphenateCaps")),
+            MaxConsecutive: consecutive,
+            KeepsLastLine: keepLine);
+    }
+
+    /// <summary>A Word compatibility setting's value, or null when the file does not state it.</summary>
+    private static string? CompatSetting(XElement? settings, string name)
     {
         const string wordUri = "http://schemas.microsoft.com/office/word";
 
         foreach (XElement setting in Word.Children(Word.Child(settings, "compat"), "compatSetting"))
         {
-            if (Word.Attribute(setting, "name") != "compatibilityMode") continue;
+            if (Word.Attribute(setting, "name") != name) continue;
             if (Word.Attribute(setting, "uri") != wordUri) continue;
 
-            if (int.TryParse(
-                    Word.Attribute(setting, "val"), NumberStyles.Integer, CultureInfo.InvariantCulture,
-                    out int mode))
-            {
-                return mode;
-            }
+            return Word.Attribute(setting, "val");
         }
 
-        return -1;
+        return null;
     }
 
     /// <summary>

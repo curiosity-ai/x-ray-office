@@ -236,6 +236,21 @@ public sealed partial class RtfDocumentReader
         public int ListLevel { get; set; }
         public bool InTable { get; set; }
         public int UnicodeSkip { get; set; } = 1;
+
+        /// <summary>
+        /// How many fallback characters of the last <c>\uN</c> are still to be dropped.
+        /// </summary>
+        /// <remarks>
+        /// Part of the group state, as <c>RTFParserState::m_nCharsToSkip</c> is in writerfilter
+        /// (<c>rtfdocumentimpl.hxx</c>:569): a group copies the count when it opens and the enclosing
+        /// group's own count comes back when it closes, so a fallback cut short by a brace resumes in
+        /// the outer group rather than ending.
+        /// </remarks>
+        public int CharsToSkip { get; set; }
+
+        /// <summary>True when a <c>\f</c> in force selected the font, rather than <c>\deff</c>.</summary>
+        /// <remarks>See <see cref="FamilyOf"/>: only a font a run asked for by number can be missing.</remarks>
+        public bool FontStated { get; set; }
         public string? HyperlinkTarget { get; set; }
         public string? InfoField { get; set; }
         public int? FontTableIndex { get; set; }
@@ -309,6 +324,9 @@ public sealed partial class RtfDocumentReader
         /// <summary>True when widow and orphan control applies.</summary>
         public bool HasWidowControl { get; set; }
 
+        /// <summary><c>\hyphpar0</c>: this paragraph is not hyphenated though the document is.</summary>
+        public bool SuppressesHyphenation { get; set; }
+
         /// <summary>True when the paragraph starts a page.</summary>
         public bool StartsNewPage { get; set; }
 
@@ -354,6 +372,8 @@ public sealed partial class RtfDocumentReader
             ListLevel = ListLevel,
             InTable = InTable,
             UnicodeSkip = UnicodeSkip,
+            CharsToSkip = CharsToSkip,
+            FontStated = FontStated,
             HyperlinkTarget = HyperlinkTarget,
             FontSizeHalfPoints = FontSizeHalfPoints,
             LeftIndent = LeftIndent,
@@ -368,6 +388,7 @@ public sealed partial class RtfDocumentReader
             KeepWithNext = KeepWithNext,
             KeepTogether = KeepTogether,
             HasWidowControl = HasWidowControl,
+            SuppressesHyphenation = SuppressesHyphenation,
             StartsNewPage = StartsNewPage,
             HasContextualSpacing = HasContextualSpacing,
             // Deliberately not inherited: a nested group collects its own text, and the
@@ -423,6 +444,7 @@ public sealed partial class RtfDocumentReader
             KeepWithNext = false;
             KeepTogether = false;
             HasWidowControl = false;
+            SuppressesHyphenation = false;
             StartsNewPage = false;
             HasContextualSpacing = false;
         }
@@ -644,11 +666,13 @@ public sealed partial class RtfDocumentReader
         /// </summary>
         /// <remarks>
         /// RTF states a border in two halves: <c>\clbrdrl</c> and friends *select* a side, and the
-        /// <c>\brdrw</c>, <c>\brdrcf</c> and <c>\brdrnone</c> words that follow describe it. So the selected
-        /// side has to be remembered between the two, which <see cref="PendingBorderSide"/> is for.
+        /// <c>\brdrw</c>, <c>\brdrcf</c> and <c>\brdr*</c> style words that follow describe it. So the
+        /// selected side has to be remembered between the two, which <see cref="PendingBorderSide"/> is for.
+        /// The style is Word's border number (<see cref="Layout.BorderRules.FromWord"/>), 0 while no style
+        /// word has been seen.
         /// </remarks>
-        public (int Twips, int? ColourIndex, bool IsNone)[] PendingCellBorders { get; } =
-            new (int, int?, bool)[4];
+        public (int Twips, int? ColourIndex, int Style)[] PendingCellBorders { get; } =
+            new (int, int?, int)[4];
 
         /// <summary>Which side the border words now apply to, or null when none has been selected.</summary>
         public int? PendingBorderSide { get; set; }
@@ -749,7 +773,7 @@ public sealed partial class RtfDocumentReader
         int?[]? Padding = null,
         Layout.VerticalTextAlignment VerticalAlignment = Layout.VerticalTextAlignment.Top,
         int? ShadingColourIndex = null,
-        (int Twips, int? ColourIndex, bool IsNone)[]? Borders = null,
+        (int Twips, int? ColourIndex, int Style)[]? Borders = null,
         Layout.CellTextDirection TextDirection = Layout.CellTextDirection.LeftToRight);
 
     private sealed class CellDraft
@@ -1224,6 +1248,38 @@ public sealed partial class RtfDocumentReader
         => index is { } at && at >= 0 && at < _colours.Count ? _colours[at] : null;
 
     /// <summary>
+    /// The family a run's font number names, as LibreOffice resolves it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A <c>\fN</c> the font table has no entry for — or a document with no font table at all, which
+    /// pandoc writes — does not fall back to the default face. writerfilter looks the number up with
+    /// <c>m_aFontNames[getFontIndex(nParam)]</c> (<c>sw/source/writerfilter/rtftok/rtfdispatchvalue.cxx</c>:768-771,
+    /// <c>rtfdocumentimpl.cxx</c>:856-870), and that map's <c>operator[]</c> hands back an empty name
+    /// rather than nothing, so the run gets a family set and that family matches no installed font.
+    /// Measured on 26.8.1.1: <c>rtf/table_error_codes.rtf</c> and three probes (no font table; a table
+    /// without the entry; the same with <c>\deff</c> naming another missing entry) all export the run's
+    /// font as <c>fo:font-family="0"</c> with the roman generic, and draw it in DejaVu Serif — the
+    /// fallback for an unknown roman family — where the default face would have been Liberation Serif.
+    /// </para>
+    /// <para>
+    /// So a missing entry selected by <c>\f</c> becomes <see cref="UnlistedFontFamily"/>, a name nothing
+    /// installs, which the resolver then treats as any other absent family. A run that never said
+    /// <c>\f</c> keeps the default, as LibreOffice's empty paragraph after a pandoc cell does.
+    /// </para>
+    /// </remarks>
+    private string? FamilyOf(GroupState state)
+        => _fontFamilies.TryGetValue(state.FontIndex, out string? family) ? family
+            : state.FontStated ? UnlistedFontFamily
+            : null;
+
+    /// <summary>
+    /// The family a run is given when its <c>\fN</c> is not in the font table: the name LibreOffice's
+    /// own flat export gives it.
+    /// </summary>
+    private const string UnlistedFontFamily = "0";
+
+    /// <summary>
     /// Records the character formatting in force over a stretch of the paragraph's text.
     /// </summary>
     /// <remarks>
@@ -1240,7 +1296,7 @@ public sealed partial class RtfDocumentReader
         RtfLayoutRun run = new(
             flow.LayoutLength,
             length,
-            _fontFamilies.GetValueOrDefault(state.FontIndex),
+            FamilyOf(state),
             SizeOf(state),
             state.Bold ? 700 : 400,
             state.Italic,
@@ -1384,8 +1440,22 @@ public sealed partial class RtfDocumentReader
 
                 // And, by the same route, TabOverSpacing — WriterFilter.cxx:325.
                 TabsOverSpacing = true,
+
+                // `\hyphauto` is a document setting that dmapper turns into ParaIsHyphenation on the
+                // default paragraph style (SettingsTable.cxx:750-760), so every paragraph inherits it
+                // unless its own `\hyphpar0` — suppressAutoHyphens — takes it away.
+                //
+                // With it come the two things writerfilter puts beside it on that style whatever the file
+                // says (SettingsTable.cxx:103, 766-785): Word's quarter-inch hyphenation zone, and
+                // hyphenation-keep with keep-line, since RTF cannot state allowHyphenationAtTrackBottom —
+                // 26.8.1.1's flat export of rtf/lorem_ipsum.rtf shows `loext:hyphenation-zone="360"`,
+                // `fo:hyphenation-keep="page"` and `loext:hyphenation-keep-line="true"` on Standard.
+                Hyphenation = _autoHyphenation && !state.SuppressesHyphenation
+                    ? new HyphenationRules(
+                        Zone: Core.Units.Length.FromTwips(360), NoCaps: _noHyphenateCaps, KeepsLastLine: true)
+                    : null,
             },
-            _fontFamilies.GetValueOrDefault(state.FontIndex),
+            FamilyOf(state),
             SizeOf(state),
             state.Bold ? 700 : 400,
             state.Italic,
@@ -1441,7 +1511,7 @@ public sealed partial class RtfDocumentReader
         => new(
             start,
             length,
-            _fontFamilies.GetValueOrDefault(state.FontIndex),
+            FamilyOf(state),
             SizeOf(state),
             state.Bold ? 700 : 400,
             state.Italic,

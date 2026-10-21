@@ -170,4 +170,150 @@ internal static class CompactFontFormat
 
         return false;
     }
+    /// <summary>The one-byte operator <c>15</c>, <c>charset</c>: the offset of the charset.</summary>
+    private const byte CharsetOperator = 15;
+
+    /// <summary>
+    /// The CID each glyph of a CID-keyed <c>CFF </c> table stands for, indexed by glyph id, or null
+    /// when the table cannot be read or is not CID-keyed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A CIDFontType0 descendant selects a glyph of a CID-keyed program by CID through the program's
+    /// own charset (PDF 1.7 §9.7.4.2), and <c>hb-subset</c> keeps the original CIDs in a subset's
+    /// charset while it renumbers the glyphs. So a PDF code that names a glyph has to be mapped to
+    /// that glyph's CID, which is what master's <c>vcl/source/fontsubset/CFFCharset.cxx</c> reads
+    /// for the same purpose (be1a60ef339c). A name-keyed program needs none of this: there the CID
+    /// is the glyph id.
+    /// </para>
+    /// <para>
+    /// The charset is read in its three formats (CFF spec, Technical Note #5176 §13): format 0 one
+    /// two-byte CID per glyph, formats 1 and 2 ranges with a one- and two-byte count. Glyph 0 is
+    /// <c>.notdef</c>, CID 0, and is not stored.
+    /// </para>
+    /// </remarks>
+    /// <param name="cff">The <c>CFF </c> table.</param>
+    /// <param name="glyphs">How many glyphs the program holds.</param>
+    public static ushort[]? CidsByGlyph(ReadOnlySpan<byte> cff, int glyphs)
+    {
+        if (cff.Length <= 4 || glyphs <= 0) return null;
+
+        int at = cff[2];
+        if (at < 4 || at >= cff.Length) return null;
+
+        if (!SkipIndex(cff, ref at)) return null;                      // Name INDEX
+        if (!ReadFirstIndexEntry(cff, ref at, out ReadOnlySpan<byte> top)) return null;
+        if (!HasRegistryOrdering(top)) return null;
+        if (Operand(top, CharsetOperator) is not { } offset || offset <= 0 || offset >= cff.Length)
+            return null;
+
+        ushort[] cids = new ushort[glyphs];
+        int glyph = 1;
+        int position = offset;
+        byte format = cff[position++];
+
+        while (glyph < glyphs)
+        {
+            switch (format)
+            {
+                case 0:
+                    if (position + 2 > cff.Length) return null;
+                    cids[glyph++] = BinaryPrimitives.ReadUInt16BigEndian(cff[position..]);
+                    position += 2;
+                    break;
+
+                case 1 or 2:
+                    int width = format == 1 ? 1 : 2;
+                    if (position + 2 + width > cff.Length) return null;
+
+                    int first = BinaryPrimitives.ReadUInt16BigEndian(cff[position..]);
+                    int left = format == 1
+                        ? cff[position + 2]
+                        : BinaryPrimitives.ReadUInt16BigEndian(cff[(position + 2)..]);
+                    position += 2 + width;
+
+                    for (int n = 0; n <= left && glyph < glyphs; n++)
+                        cids[glyph++] = (ushort)(first + n);
+                    break;
+
+                default:
+                    return null;
+            }
+        }
+
+        return cids;
+    }
+
+    /// <summary>The integer operand a one-byte operator takes in a DICT, or null.</summary>
+    /// <remarks>The operand last pushed before the operator, which is the only one it takes.</remarks>
+    private static int? Operand(ReadOnlySpan<byte> dictionary, byte op)
+    {
+        int at = 0;
+        int? last = null;
+
+        while (at < dictionary.Length)
+        {
+            byte b = dictionary[at];
+
+            switch (b)
+            {
+                case Escape:
+                    at += 2;
+                    last = null;
+                    break;
+
+                case <= 21:
+                    if (b == op) return last;
+                    at += 1;
+                    last = null;
+                    break;
+
+                case 28:
+                    if (at + 3 > dictionary.Length) return null;
+                    last = BinaryPrimitives.ReadInt16BigEndian(dictionary[(at + 1)..]);
+                    at += 3;
+                    break;
+
+                case 29:
+                    if (at + 5 > dictionary.Length) return null;
+                    last = BinaryPrimitives.ReadInt32BigEndian(dictionary[(at + 1)..]);
+                    at += 5;
+                    break;
+
+                case 30:
+                    at += 1;
+                    while (at < dictionary.Length)
+                    {
+                        byte pair = dictionary[at++];
+                        if ((pair & 0x0F) == 0x0F || (pair >> 4) == 0x0F) break;
+                    }
+
+                    last = null;
+                    break;
+
+                case >= 32 and <= 246:
+                    last = b - 139;
+                    at += 1;
+                    break;
+
+                case >= 247 and <= 250:
+                    if (at + 2 > dictionary.Length) return null;
+                    last = ((b - 247) * 256) + dictionary[at + 1] + 108;
+                    at += 2;
+                    break;
+
+                case >= 251 and <= 254:
+                    if (at + 2 > dictionary.Length) return null;
+                    last = (-(b - 251) * 256) - dictionary[at + 1] - 108;
+                    at += 2;
+                    break;
+
+                default:
+                    at += 1;
+                    break;
+            }
+        }
+
+        return null;
+    }
 }

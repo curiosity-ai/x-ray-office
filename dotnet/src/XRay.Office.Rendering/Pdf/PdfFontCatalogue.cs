@@ -303,36 +303,164 @@ internal sealed class PdfFontCatalogue(IPdfFontProvider provider, bool embed, Pd
 
         byte[]? embedded = Embed(subset);
 
-        // A CFF-flavoured face is named and not embedded. Everything else here writes a simple
-        // /Subtype/TrueType font whose one-byte codes select glyphs through an identity
-        // Macintosh cmap, and a CFF face cannot be addressed that way at all:
-        //
-        //   * under a TrueType dictionary the program is a /FontFile2, which promises `glyf`
-        //     outlines. Poppler says "Mismatch between font type and embedded font file" and,
-        //     for a CID-keyed one, "No font in show" for every text operation — measured 161
-        //     times on `16 - UTM - (NASA).pptx`, whose runs fall back to Unifont.
-        //   * under a Type1 dictionary (PDF 1.7 §9.9, which is where a name-keyed CFF belongs)
-        //     a code selects a glyph by *name* through the CFF charset. Our codes are indices,
-        //     so every one of them misses: measured on an 18 pt Loma probe, poppler drew a row
-        //     of tofu boxes where LibreOffice drew the words.
-        //   * a CID-keyed CFF is not admissible under any simple dictionary — it needs a
-        //     composite /Type0 font with a CIDFontType0 descendant.
-        //
-        // So the face is named and not embedded, which is what a face whose file could not be
-        // read already does: the widths are still the face's, so pen positions and line breaks
-        // are unchanged, and the text still extracts. Measured honestly, this buys a valid file
-        // and not correct glyphs — the reference draws Loma and both the old output and this one
-        // draw tofu, and on the UTM deck it turns 161 hard reader errors and a blank page into a
-        // clean file. Putting the right outlines on the page is two further pieces of work: a
-        // /Differences glyph-name encoding read out of the CFF charset for a name-keyed face,
-        // and a composite /Type0 font with Identity-H two-byte codes for a CID-keyed one.
-        if (embedded is not null && IsCompactFontFormat(embedded)) embedded = null;
+        // A CFF-flavoured face cannot be a simple /TrueType font — a /FontFile2 promises `glyf`
+        // outlines, and poppler answers "Mismatch between font type and embedded font file" and
+        // then draws nothing — so it is written as a composite font instead. See `Composite`.
+        if (embedded is not null && IsCompactFontFormat(embedded))
+        {
+            return Composite(writer, subset, catalogue, name, upem, last, embedded, toUnicode)
+                   ?? NamedOnly(writer, subset, name, upem, last, widths.ToString(), toUnicode);
+        }
 
         int descriptor = WriteDescriptor(writer, subset, name, upem, embedded);
 
         return writer.Add(
             $"<</Type/Font/Subtype/TrueType/BaseFont/{name}/FirstChar 0/LastChar {last}"
             + $"/Widths{widths}/FontDescriptor {descriptor} 0 R/ToUnicode {toUnicode} 0 R>>");
+    }
+
+    /// <summary>A simple font that names its face and embeds no program.</summary>
+    /// <remarks>
+    /// What a face whose program could not be written gets: the widths are still the face's, so
+    /// pen positions and line breaks are unchanged and the text still extracts, but a reader
+    /// draws its own substitute.
+    /// </remarks>
+    private static int NamedOnly(
+        PdfDocumentWriter writer, Subset subset, string name, int upem, int last, string widths,
+        int toUnicode)
+    {
+        int descriptor = WriteDescriptor(writer, subset, name, upem, null);
+
+        return writer.Add(
+            $"<</Type/Font/Subtype/TrueType/BaseFont/{name}/FirstChar 0/LastChar {last}"
+            + $"/Widths{widths}/FontDescriptor {descriptor} 0 R/ToUnicode {toUnicode} 0 R>>");
+    }
+
+    /// <summary>
+    /// Writes a CFF-flavoured subset as a composite font: <c>/Type0</c> over a
+    /// <c>CIDFontType0</c> whose program is the bare <c>CFF </c> table, or null when the table
+    /// cannot be read.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <strong>26.8.1.1 embeds every CFF face, and this tree named them without embedding
+    /// them.</strong> Measured on <c>probes/calc-anchor-r26/cff.fodt</c> (Loma, which is
+    /// name-keyed; Unifont, which is CID-keyed; Inter Regular and Light): <c>pdffonts</c> reports
+    /// all four as embedded Type 1 in 26.8.1.1's PDF, which converts the CFF program to Type 1
+    /// (<c>ConvertCFFfontToType1</c>), and all four as unembedded here, so a reader drew its own
+    /// face — tofu, for Loma's Thai.
+    /// </para>
+    /// <para>
+    /// The shape is master's (be1a60ef339c, <c>PDFWriterImpl::emitCIDCMap</c> and
+    /// <c>emitFonts</c>), not 26.8.1.1's Type 1 conversion: the glyphs drawn are the same outlines,
+    /// and embedding the table unchanged avoids writing a Type 1 converter. Three pieces:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description>
+    /// <strong>The content stream is untouched.</strong> The <c>/Encoding</c> is an embedded CMap
+    /// with a one-byte codespace, <c>&lt;00&gt; &lt;FF&gt;</c>, whose <c>cidrange</c>s map each code
+    /// to its glyph's CID, so a run is still two hex digits per glyph and the same codes the
+    /// <c>ToUnicode</c> map reads.
+    /// </description></item>
+    /// <item><description>
+    /// <strong>The CID is the glyph id for a name-keyed program and the charset's CID for a
+    /// CID-keyed one</strong>, because a CIDFontType0 selects a CID-keyed program's glyph through
+    /// its charset and <c>hb-subset</c> keeps the original CIDs there. See
+    /// <see cref="CompactFontFormat.CidsByGlyph"/>.
+    /// </description></item>
+    /// <item><description>
+    /// <strong><c>/W</c> is indexed by CID</strong>, in runs of consecutive CIDs.
+    /// </description></item>
+    /// </list>
+    /// </remarks>
+    private static int? Composite(
+        PdfDocumentWriter writer, Subset subset, PdfFontCatalogue catalogue, string name, int upem,
+        int last, byte[] embedded, int toUnicode)
+    {
+        if (SfntTables.Read(embedded)?.Table("CFF ") is not { Length: > 4 } cff) return null;
+
+        int glyphs = last + 1;
+        ushort[]? cids = CompactFontFormat.IsCidKeyed(embedded)
+            ? CompactFontFormat.CidsByGlyph(cff, glyphs)
+            : null;
+        if (CompactFontFormat.IsCidKeyed(embedded) && cids is null) return null;
+
+        ushort CidOf(int code) => cids is null ? (ushort)code : cids[code];
+
+        // The CMap: runs of codes whose CIDs are consecutive, at most a hundred per section.
+        List<(int First, int Last, int Cid)> ranges = [];
+        for (int code = 0; code < glyphs; code++)
+        {
+            int cid = CidOf(code);
+            if (ranges.Count > 0 && ranges[^1].Cid + (code - ranges[^1].First) == cid)
+                ranges[^1] = (ranges[^1].First, code, ranges[^1].Cid);
+            else
+                ranges.Add((code, code, cid));
+        }
+
+        StringBuilder cmap = new();
+        cmap.Append("/CIDInit/ProcSet findresource begin\n12 dict begin\nbegincmap\n");
+        cmap.Append("/CIDSystemInfo<</Registry(Adobe)/Ordering(Identity)/Supplement 0>> def\n");
+        cmap.Append(CultureInfo.InvariantCulture, $"/CMapName/{subset.Tag}-Subset def\n");
+        cmap.Append("/CMapType 1 def\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n");
+        for (int at = 0; at < ranges.Count; at += 100)
+        {
+            int count = Math.Min(100, ranges.Count - at);
+            cmap.Append(CultureInfo.InvariantCulture, $"{count} begincidrange\n");
+            for (int n = 0; n < count; n++)
+            {
+                (int first, int end, int cid) = ranges[at + n];
+                cmap.Append(CultureInfo.InvariantCulture, $"<{first:X2}> <{end:X2}> {cid}\n");
+            }
+
+            cmap.Append("endcidrange\n");
+        }
+
+        cmap.Append("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+
+        int encoding = writer.Reserve();
+        writer.SetStream(
+            encoding,
+            $"/Type/CMap/CMapName/{subset.Tag}-Subset"
+            + "/CIDSystemInfo<</Registry(Adobe)/Ordering(Identity)/Supplement 0>>",
+            Encoding.Latin1.GetBytes(cmap.ToString()),
+            compress: false);
+
+        // `/W` by CID, sorted, in runs of consecutive CIDs.
+        List<(int Cid, double Width)> widths = [];
+        for (int code = 0; code < glyphs; code++)
+            widths.Add((CidOf(code), catalogue.Width(subset.Face.Reference, subset.GlyphsByCode[code])));
+        widths.Sort((a, b) => a.Cid.CompareTo(b.Cid));
+
+        StringBuilder w = new("[");
+        for (int at = 0; at < widths.Count;)
+        {
+            int run = 1;
+            while (at + run < widths.Count && widths[at + run].Cid == widths[at].Cid + run) run++;
+
+            w.Append(CultureInfo.InvariantCulture, $"{widths[at].Cid}[");
+            for (int n = 0; n < run; n++)
+            {
+                if (n > 0) w.Append(' ');
+                w.Append(PdfSyntax.Number(widths[at + n].Width));
+            }
+
+            w.Append(']');
+            at += run;
+        }
+
+        w.Append(']');
+
+        int descriptor = WriteDescriptor(writer, subset, name, upem, cff, compactFontFormat: true);
+
+        int descendant = writer.Add(
+            $"<</Type/Font/Subtype/CIDFontType0/BaseFont/{name}"
+            + "/CIDSystemInfo<</Registry(Adobe)/Ordering(Identity)/Supplement 0>>"
+            + $"/FontDescriptor {descriptor} 0 R/W{w}>>");
+
+        return writer.Add(
+            $"<</Type/Font/Subtype/Type0/BaseFont/{name}/Encoding {encoding} 0 R"
+            + $"/DescendantFonts[{descendant} 0 R]/ToUnicode {toUnicode} 0 R>>");
     }
 
     /// <summary>
@@ -464,7 +592,8 @@ internal sealed class PdfFontCatalogue(IPdfFontProvider provider, bool embed, Pd
     }
 
     private static int WriteDescriptor(
-        PdfDocumentWriter writer, Subset subset, string name, int upem, byte[]? embedded)
+        PdfDocumentWriter writer, Subset subset, string name, int upem, byte[]? embedded,
+        bool compactFontFormat = false)
     {
         OpenTypeFace? opentype = subset.Face.OpenType;
         FontReference reference = subset.Face.Reference;
@@ -490,13 +619,24 @@ internal sealed class PdfFontCatalogue(IPdfFontProvider provider, bool embed, Pd
         {
             int program = writer.Reserve();
 
+            // A bare CFF table, for a CIDFontType0 descendant: see `Composite`.
+            if (compactFontFormat)
+            {
+                writer.SetStream(program, "/Subtype/CIDFontType0C", embedded, compress: false);
+                return writer.Add(
+                    $"<</Type/FontDescriptor/FontName/{name}/Flags {flags}"
+                    + $"/FontBBox[{xMin} {yMin} {xMax} {yMax}]"
+                    + $"/ItalicAngle {PdfSyntax.Number(italicAngle)}/Ascent {ascent}/Descent {descent}"
+                    + $"/CapHeight {capHeight}/StemV {StemWidth(reference)}/FontFile3 {program} 0 R>>");
+            }
+
             // Uncompressed, which is not an oversight. The fidelity harness finds a PDF's content
             // streams by inflating every stream in the file and keeping the ones holding "BT"; a
             // deflated font program is binary that inflates successfully and contains "BT" often
             // enough to be read as a page. Leaving font programs stored keeps them invisible to it.
             //
-            // /FontFile2 with /Length1, unconditionally, because only a `glyf`-flavoured program
-            // reaches here: see WriteSubset, which drops a CFF one rather than misdescribe it.
+            // /FontFile2 with /Length1 for every `glyf`-flavoured program; a CFF one is written as
+            // a /FontFile3 above.
             writer.SetStream(
                 program,
                 string.Create(CultureInfo.InvariantCulture, $"/Length1 {embedded.Length}"),
@@ -518,8 +658,9 @@ internal sealed class PdfFontCatalogue(IPdfFontProvider provider, bool embed, Pd
     /// </summary>
     /// <remarks>
     /// <para>
-    /// It decides whether the program can be embedded at all, and getting it wrong is invisible
-    /// to every check short of looking at the page. Written as a <c>/FontFile2</c> — which
+    /// It decides which dictionary the program goes under — a simple <c>/TrueType</c> font or a
+    /// composite one (see <c>Composite</c>) — and getting it wrong is invisible to every check
+    /// short of looking at the page. Written as a <c>/FontFile2</c> — which
     /// promises a TrueType program — a reader rejects the mismatch. Measured on
     /// <c>16 - UTM - (NASA).pptx</c>: poppler reported *"Mismatch between font type and embedded
     /// font file"* and then *"No font in show"* 161 times, so 161 glyph runs drew nothing at all

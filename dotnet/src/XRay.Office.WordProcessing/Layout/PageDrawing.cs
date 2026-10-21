@@ -760,7 +760,23 @@ public static class PageDrawing
     {
         if (cell.ContentTransform is not { } onto)
         {
-            DrawFlow(cell.Content, sink, background);
+            // An exact row's overflow is cut at the cell's edge — see `TableLayouter.ClippedToExactRow`,
+            // which has already dropped the lines that start below it.
+            if (cell.ClipsContent)
+            {
+                sink.Save();
+                sink.ClipPath(GraphicsPath.Rectangle(cell.Area));
+            }
+
+            try
+            {
+                DrawFlow(cell.Content, sink, background);
+            }
+            finally
+            {
+                if (cell.ClipsContent) sink.Restore();
+            }
+
             return;
         }
 
@@ -1657,6 +1673,12 @@ public static class PageDrawing
         List<TabbedSegment> stretches =
             Stretches(paragraph, start, end, line.StartsParagraph, area.Width);
 
+        // The run the line's last glyphs came from and where the pen stood after it, for the hyphen a
+        // hyphenated line ends in.
+        PageRun? lastRun = null;
+        Length lastPen = lineLeft;
+        Colour lastColour = default;
+
         for (int index = 0; index < stretches.Count; index++)
         {
             TabbedSegment segment = stretches[index];
@@ -1733,7 +1755,7 @@ public static class PageDrawing
 
                 if (highlights is not null && run.IsHighlighted)
                 {
-                    highlights.Add((Band(paragraph, run, pen, extent, baseline), run.Highlight));
+                    highlights.Add((Band(paragraph, run, pen, extent, baseline, line.StartsParagraph), run.Highlight));
                 }
 
                 if (rules is not null && run.IsDecorated)
@@ -1744,12 +1766,56 @@ public static class PageDrawing
                 // The clickable area of a link is the band the run's own face and size give it, the same
                 // rectangle a highlight would take, so the pointer changes where the text is.
                 if (links is not null && run.Link is { Length: > 0 } link
-                    && Band(paragraph, run, pen, extent, baseline) is { IsEmpty: false } clickable)
+                    && Band(paragraph, run, pen, extent, baseline, line.StartsParagraph) is { IsEmpty: false } clickable)
                 {
                     links.Add((clickable, link));
                 }
 
                 pen += extent;
+                lastRun = run;
+                lastPen = pen;
+                lastColour = run.ColourOn(background);
+            }
+        }
+
+        // Automatic hyphenation broke the line's last word: Writer's `SwHyphPortion` draws a hyphen in the
+        // font in force at the break, straight after the text, and the line's width the layout justified
+        // and aligned already includes it.
+        if (line.Box.Line.Hyphenated && lastRun is { } broken)
+        {
+            ShapedText hyphen = TextShaper.Default.Shape(broken.Face, "-", broken.EffectiveShaping);
+            if (hyphen.Glyphs.Count > 0)
+            {
+                runs.Add((
+                    Build(
+                        hyphen,
+                        "-",
+                        broken.EmSize,
+                        broken.Font ?? Reference(paragraph, broken.Face),
+                        new DocPoint(lastPen, baseline - broken.Rise),
+                        Length.Zero,
+                        broken.Tracking,
+                        broken.WidthScale),
+                    lastColour));
+            }
+        }
+
+        // The trailing blank, decorated like the text before it — see PageParagraph.DecoratesTrailingBlank.
+        if (rules is not null && paragraph.DecoratesTrailingBlank
+            && line.Box.Line.End > line.Box.Line.VisibleEnd
+            && lastRun is { IsDecorated: true } decorated && decorated.End >= end)
+        {
+            Length blank = TextShaper.Default.Shape(decorated.Face, " ", decorated.EffectiveShaping)
+                .Width(decorated.EmSize);
+            Length room = area.X + area.Width - paragraph.Format.EndIndent - lastPen;
+
+            // Writer measures that blank a little narrower than the face's own advance says (2.40 pt
+            // against 2.49 for Carlito at 11 pt on a probe), so a blank that just fits the line for it may
+            // overrun it here by a fraction of a point: clamped to the room rather than refused, which on
+            // that probe draws 2.43 pt where the reference draws 2.40.
+            if (blank > Length.Zero && room > Length.Zero)
+            {
+                Rules(decorated, lastPen, Length.Min(blank, room), baseline, rules, background);
             }
         }
 
@@ -1791,7 +1857,7 @@ public static class PageDrawing
     /// </para>
     /// </remarks>
     private static DocRect Band(
-        PageParagraph paragraph, PageRun run, Length pen, Length extent, Length baseline)
+        PageParagraph paragraph, PageRun run, Length pen, Length extent, Length baseline, bool startsParagraph)
     {
         LineMetrics metrics = LineSpacing.Resolve(
             run.Face, paragraph.Metrics, WriterLineBox.LeadingAboveText);
@@ -1800,6 +1866,36 @@ public static class PageDrawing
         Length ascent = metrics.ScaledAscent(size);
         Length height = metrics.ScaledLineHeight(size);
         if (height <= Length.Zero) return default;
+
+        // Proportional spacing below single shrinks the band with the line, so that it does not reach
+        // into the line above: `SwTextPaintInfo::CalcRect` scales the portion's height and its ascent by
+        // the percentage (`sw/source/core/text/inftxt.cxx`:846-852 and :903-909 in the tree here). In
+        // 26.8.1.1 that is for `LineSpaceRule::Auto` with `InterLineSpaceRule::Prop` and nothing else:
+        // tdf#170635 (backport f4cf1b61bd36) removed the arm that did the same for a fixed leading, which
+        // the tree still carries and this never had.
+        // Measured on an authored highlight at `w:line="180" w:lineRule="auto"`: 26.8.1.1 draws the band
+        // 9.95 pt tall with its top 7.85 pt above the baseline, against 13.45 and 10.47 here before.
+        //
+        // On a line after the paragraph's first the portion has already been shrunk once, to the line's
+        // own reduced height with four fifths of it above the baseline — the fixed-height arithmetic
+        // `SwTextFormatter::CalcRealHeight` borrows (`itrform2.cxx`:2366-2393) — so the band is the
+        // percentage of that. Measured at 75 % in both a DOCX and a flat ODT: 9.95 pt with 7.85 above the
+        // baseline on the first line and 7.55 pt with 6.00 above it on every later one.
+        if (paragraph.Format.LineSpacing is { Mode: LineSpacingMode.Proportional } spacing
+            && (int)Math.Round(spacing.Proportion * 100) is var percent and < 100)
+        {
+            if (startsParagraph)
+            {
+                height = height * percent / 100;
+                ascent = ascent * percent / 100;
+            }
+            else
+            {
+                Length line = height * percent / 100;
+                height = line * percent / 100;
+                ascent = line * 4 / 5 * percent / 100;
+            }
+        }
 
         // The rise moves the band with the text: a highlighted superscript is banded where it is drawn.
         return new DocRect(pen, baseline - run.Rise - ascent, extent, height);

@@ -1,0 +1,3 @@
+<w:tbl><w:tblPr><w:tblStyle w:val="Ctx"/><w:tblW w:w="5000" w:type="dxa"/></w:tblPr><w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>
+<w:tr><w:tc><w:p><w:pPr><w:pStyle w:val="Body"/></w:pPr><w:r><w:t>Aw00 first</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="Body"/></w:pPr><w:r><w:t>Bw00 second</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="Body"/></w:pPr><w:r><w:t>Cw00 third</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+<w:p><w:pPr><w:pStyle w:val="Body"/></w:pPr><w:r><w:t>Dw00 after</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="Body"/></w:pPr><w:r><w:t>Ew00 after</w:t></w:r></w:p>

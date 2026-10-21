@@ -780,9 +780,10 @@ internal static class OdsCellFormats
 
             if (!found.HasValue) return (null, FontFamilyClass.Unknown);
 
+            // A list is kept whole, as LibreOffice keeps it: see `OdfFontFamilies`.
             return matched == 1
-                ? (FontFaceFamily(found.Value), FontFaceClass(found.Value))
-                : (found.Value, FontFamilyClass.Unknown);
+                ? (OdfFontFamilies.Parse(FontFaceFamily(found.Value)), FontFaceClass(found.Value))
+                : (OdfFontFamilies.Parse(found.Value), FontFamilyClass.Unknown);
         }
 
         /// <summary>The two spellings of a face, in the order one style's own attributes settle.</summary>

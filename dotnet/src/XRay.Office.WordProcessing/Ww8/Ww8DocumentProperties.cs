@@ -192,9 +192,17 @@ public readonly record struct Ww8DocumentProperties
         {
             short interval = BinaryPrimitives.ReadInt16LittleEndian(dop[TabIntervalOffset..]);
 
-            // A zero or negative interval would make a tab advance nowhere and a layout loop; the bound
-            // above it rejects the absurd rather than the merely wide.
-            if (interval is > 0 and <= 31680) properties = properties with
+            // Below 56 twips — a zero and a negative included — the WW8 import takes 709, Writer's own
+            // 1.25 cm: `if( nDefTabSiz < 56 ) nDefTabSiz = 709;` (`sw/source/filter/ww8/ww8par.cxx`:
+            // 1975-1977). Measured on 26.8.1.1 with one `.doc` whose `dxaTab` was patched to 0, 30, 56 and
+            // 100: the first two set their tabs 709 twips apart and the last two at their own interval,
+            // where this tree honoured 30 and took 720 for 0. The bound above rejects the absurd rather
+            // than the merely wide.
+            if (interval < 56) properties = properties with
+            {
+                DefaultTabInterval = Length.FromTwips(709),
+            };
+            else if (interval <= 31680) properties = properties with
             {
                 DefaultTabInterval = Length.FromTwips(interval),
             };

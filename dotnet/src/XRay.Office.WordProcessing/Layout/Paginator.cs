@@ -932,7 +932,7 @@ public sealed class Paginator
         // Lays one block out at a given breaking width. A local function rather than the body of the loop
         // above, because a section whose columns are *not* all the same width has to lay a block out again
         // when it lands in a column of a different measure — see `Laid`.
-        LaidBlock LayOutBlock(int i, Length width)
+        LaidBlock LayOutBlock(int i, Length width, ParagraphFormat? formatOverride = null)
         {
             OfficeOperation.ThrowIfCancelled();
             if (blocks[i] is PageTable table)
@@ -989,7 +989,7 @@ public sealed class Paginator
                 || paragraph.IsHorizontallyScaled
                 ? layouter.Layout(
                     paragraph.Measure(),
-                    paragraph.Format,
+                    formatOverride ?? paragraph.Format,
                     width,
                     paragraph.Language,
                     previous,
@@ -997,7 +997,7 @@ public sealed class Paginator
                     paragraph.EmSize)
                 : layouter.Layout(
                     paragraph.Text,
-                    paragraph.Format,
+                    formatOverride ?? paragraph.Format,
                     paragraph.EmSize,
                     width,
                     paragraph.Language,
@@ -1163,6 +1163,10 @@ public sealed class Paginator
         // Blocks laid out a second time because they landed in a column narrower or wider than the one the
         // pass above assumed. Empty for every document whose columns are even, which is nearly all of them.
         Dictionary<(int Index, long Width), LaidBlock> reLaid = [];
+
+        // The lines each paragraph may not hyphenate because they end a page — see the hyphenation-keep
+        // test where a paragraph is split.
+        Dictionary<int, HashSet<int>> noHyphenationAt = [];
 
         // The block whose placement is in flight and the layout it was cut from, so that the rest of it is
         // taken from the same list of lines when it crosses into a column of another width.
@@ -1792,6 +1796,41 @@ public sealed class Paginator
             allowed = GivingUpALineToKeepItsNote(
                 paragraph, layout, lineIndex, allowed, notes,
                 used + spaceAbove, columnBottom, columnIsEmpty);
+
+            // Hyphenation-keep: the line that ends this page or column may not end hyphenated, so the
+            // paragraph is broken again with hyphenation switched off for that one line — Writer's
+            // `SetNoHyphOffset` and a reformat of the master (`sw/source/core/text/widorp.cxx`:571-600,
+            // checked in `guess.cxx`:304-319). Only that line changes: the filler is greedy, so the lines
+            // above it break where they did, and the ones after it are on the next page and hyphenate as
+            // they please. Only on a page without unequal columns, whose blocks are not re-broken per
+            // column — see `Laid`.
+            //
+            // One thing of 26.8.1.1's is deliberately not reproduced. On a follow frame the offset is
+            // stored relative to that frame's own start and `SwTextGuess` compares it with an index into
+            // the whole paragraph, so when the line that ends the *second* page of a paragraph would
+            // hyphenate, the reference stops hyphenating anywhere in that follow frame rather than in that
+            // one line. Measured on paragraphs spanning three pages: the first page's last line agrees,
+            // and the follow pages' lines break as if hyphenation were off. That is a defect of the
+            // reference's bookkeeping, not a rule a document asks for.
+            if (allowed > 0
+                && lineIndex + allowed < layout.Lines.Count
+                && page.Ruler is null
+                && paragraph.Format.Hyphenation is { KeepsLastLine: true } keep
+                && layout.Lines[lineIndex + allowed - 1].Line is { Hyphenated: true } lastHere)
+            {
+                HashSet<int> offsets = noHyphenationAt.TryGetValue(paragraphIndex, out HashSet<int>? known)
+                    ? known
+                    : noHyphenationAt[paragraphIndex] = [];
+
+                if (offsets.Add(lastHere.Start))
+                {
+                    laid[paragraphIndex] = LayOutBlock(
+                        paragraphIndex,
+                        laidAt[paragraphIndex],
+                        paragraph.Format with { Hyphenation = keep with { NoHyphenationAt = offsets } });
+                    continue;
+                }
+            }
 
             Length top = used + spaceAbove;
             bool firstLineHere = columnIsEmpty;

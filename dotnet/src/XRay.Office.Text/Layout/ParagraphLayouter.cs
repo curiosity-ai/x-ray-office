@@ -99,6 +99,21 @@ public sealed record LaidOutParagraph(
 
     /// <summary>The whole paragraph's height, the space above and below included.</summary>
     public Length Height => SpaceBefore + TextHeight + SpaceAfter;
+
+    /// <summary>
+    /// The leading the paragraph hands down to whatever follows it, where that is not its last line's own
+    /// space above; null otherwise.
+    /// </summary>
+    /// <remarks>
+    /// Set for a paragraph on a text grid. <c>SwTextFrame::GetLineSpace</c> knows nothing of the grid: it is
+    /// still the proportional rule's percentage of the last line's <em>text</em> height
+    /// (<c>sw/source/core/text/txtfrm.cxx</c>:3996-4020, the height from <c>CalcHeightOfLastLine</c>'s
+    /// <c>MaxAscentDescent</c>), so a one-line 150 % paragraph on an 18 pt grid hands down half its 12.65 pt
+    /// text, not half the 18 pt line and not the nothing its own first line carries. Measured on 26.8.1.1:
+    /// that paragraph's successor sits 6.30 pt lower than without it, and a table cell's paragraphs — which
+    /// take no line spacing on a grid page — still hand it to the paragraph after them.
+    /// </remarks>
+    public Length? LeadingBelow { get; init; }
 }
 
 /// <summary>
@@ -208,10 +223,17 @@ public sealed class ParagraphLayouter
         // Snapped to whole twips before anything else uses it, because that is Writer's layout unit and
         // every later sum inherits the difference: a fifth of a twip per line accumulates over a page to
         // enough to fit one line more than Writer does.
-        Length natural = Length.FromTwips(_metrics.ScaledLineHeight(size).Twips);
+        // A paragraph on a text grid does not take Word's East Asian line height, and nor does an empty
+        // one: 26.8.1.1 applies it to a text or field portion's height (tdf#171275) and an empty
+        // paragraph's line has none — see `MetricGrid.EastAsianScaled`.
+        LineMetrics metrics = (paragraph.TextGrid is not null || text.Length == 0) && _metrics.Grid is { } device
+            ? _metrics with { Grid = device with { ScalesEastAsianFaces = false } }
+            : _metrics;
+        Length natural = Length.FromTwips(metrics.ScaledLineHeight(size).Twips);
+        Length naturalAscent = Length.FromTwips(metrics.ScaledAscent(size).Twips);
         Length height = paragraph.LineSpacing.Apply(natural);
         (Length baseline, Length spaceAbove) =
-            BaselineIn(height, natural, size, paragraph.LineSpacing.Mode);
+            BaselineIn(height, natural, naturalAscent, paragraph.LineSpacing.Mode);
 
         WrappedLines? wrapped = obstacles is { IsEmpty: false }
             ? new WrappedLines(obstacles, paragraph, areaWidth, (_, _) => height)
@@ -247,22 +269,33 @@ public sealed class ParagraphLayouter
             Length spaceAdd = Justification(
                 paragraph, lines[i], text, space.Width, isLast: i == lines.Count - 1);
 
+            (Length lineHeight, Length lineBaseline, Length lineAbove) =
+                paragraph.TextGrid is { Snaps: true } empty && IsFormattedEmpty(text, paragraph)
+                    ? (empty.Pitch, naturalAscent + Length.FromTwips((empty.Pitch.Twips - natural.Twips) / 2),
+                       Length.Zero)
+                    : paragraph.TextGrid is { } grid
+                        ? OnGrid(grid, paragraph.LineSpacing, natural, naturalAscent, isFirst)
+                        : (height, baseline, spaceAbove);
+
             boxes.Add(new LineBox(
                 lines[i],
                 LeftOf(paragraph, lines[i], space, areaWidth, spaceAdd, isLast: i == lines.Count - 1),
                 top,
-                height + space.Descent,
-                baseline + space.Descent,
-                spaceAbove,
+                lineHeight + space.Descent,
+                lineBaseline + space.Descent,
+                lineAbove,
                 spaceAdd, shares));
 
-            if (!shares) top += height + space.Descent;
+            if (!shares) top += lineHeight + space.Descent;
         }
 
         return new LaidOutParagraph(
             boxes,
             SpaceBetween(follows, paragraph),
-            paragraph.SpaceAfter);
+            paragraph.SpaceAfter)
+        {
+            LeadingBelow = GridLeadingBelow(paragraph, natural),
+        };
     }
 
     /// <summary>
@@ -326,6 +359,8 @@ public sealed class ParagraphLayouter
             ? new WrappedLines(obstacles, paragraph, areaWidth, HeightOfLine)
             : null;
 
+        Length lastNatural = Length.Zero;
+
         List<TextLine> lines = _filler.Fill(
             measured,
             paragraph.BodyWidth(areaWidth),
@@ -352,11 +387,13 @@ public sealed class ParagraphLayouter
             // baseline that gives. Measuring each stretch alone would put the two on different baselines.
             (Length natural, Length ascent, Length textHeight) =
                 BandHeight(measured, lines, wrapped, i);
+            lastNatural = natural;
 
             Length height = paragraph.LineSpacing.Apply(
                 natural, textHeight > Length.Zero ? textHeight : paragraphText);
-            (Length baseline, Length spaceAbove) =
-                BaselineFrom(height, natural, ascent, paragraph.LineSpacing.Mode);
+            (Length baseline, Length spaceAbove) = paragraph.TextGrid is { } grid
+                ? OnGridOrEmpty(grid, natural, ascent, isFirst, out height)
+                : BaselineFrom(height, natural, ascent, paragraph.LineSpacing.Mode);
 
             Length spaceAdd = Justification(
                 paragraph, lines[i], measured.Text, space.Width,
@@ -380,24 +417,44 @@ public sealed class ParagraphLayouter
         // is depends on which runs it ends up holding.
         Length HeightOfLine(int index, IReadOnlyList<TextLine> broken)
         {
-            if (index < broken.Count)
+            (Length own, Length up, Length ownText) = index < broken.Count
+                ? measured.MeasureLine(broken[index].Start, broken[index].VisibleEnd)
+                : measured.MeasureLine(0, Math.Min(1, measured.Text.Length));
+
+            if (paragraph.TextGrid is { } grid)
             {
-                (Length own, _, Length ownText) =
-                    measured.MeasureLine(broken[index].Start, broken[index].VisibleEnd);
-                return paragraph.LineSpacing.Apply(
-                    own, ownText > Length.Zero ? ownText : paragraphText);
+                OnGridOrEmpty(grid, own, up, index == 0, out Length gridded);
+                return gridded;
             }
 
-            (Length fallback, _, Length fallbackText) =
-                measured.MeasureLine(0, Math.Min(1, measured.Text.Length));
-            return paragraph.LineSpacing.Apply(
-                fallback, fallbackText > Length.Zero ? fallbackText : paragraphText);
+            return paragraph.LineSpacing.Apply(own, ownText > Length.Zero ? ownText : paragraphText);
+        }
+
+        // The grid's arithmetic, except for the paragraph `SwTextFrame::FormatEmpty` takes whole: one
+        // with no text, start-aligned and single-or-more spaced, is exactly one pitch whatever its font
+        // (`sw/source/core/text/porrst.cxx`:489-494), where formatting it would round its height up to a
+        // whole number of pitches.
+        (Length Baseline, Length SpaceAbove) OnGridOrEmpty(
+            TextGridSnap grid, Length natural, Length ascent, bool isFirst, out Length height)
+        {
+            if (grid.Snaps && IsFormattedEmpty(measured.Text, paragraph))
+            {
+                height = grid.Pitch;
+                return (ascent + Length.FromTwips((grid.Pitch.Twips - natural.Twips) / 2), Length.Zero);
+            }
+
+            (height, Length baseline, Length above) =
+                OnGrid(grid, paragraph.LineSpacing, natural, ascent, isFirst);
+            return (baseline, above);
         }
 
         return new LaidOutParagraph(
             boxes,
             SpaceBetween(follows, paragraph),
-            paragraph.SpaceAfter);
+            paragraph.SpaceAfter)
+        {
+            LeadingBelow = GridLeadingBelow(paragraph, lastNatural),
+        };
     }
 
     /// <summary>
@@ -517,6 +574,88 @@ public sealed class ParagraphLayouter
               && previous.Alignment == current.Alignment;
 
     /// <summary>
+    /// A line's height, baseline and empty space above its text on a page's text grid.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>SwTextFormatter::CalcRealHeight</c>'s grid branch (<c>sw/source/core/text/itrform2.cxx</c>:2275-2345).
+    /// The line is as many whole pitches as its text needs and the text is centred in them,
+    /// <c>ascent + (pitch·n − height) / 2</c> in truncating twips; an at-least rule raises the line to its
+    /// value, and one of nought takes the text's own height instead (tdf#164871); an exact rule replaces
+    /// it; and a proportional rule multiplies a second or later line by at least a hundred per cent, the
+    /// extra going above the text as it does off the grid. The first line ignores a proportional rule
+    /// altogether, which is why a grid paragraph never shrinks.
+    /// </para>
+    /// <para>
+    /// A paragraph that does not snap — one in a table, where the document does not ask for grid heights
+    /// there — keeps its text's own height and takes <em>no</em> line spacing: Writer returns before the
+    /// spacing rule is read (tdf#88752, tdf#167583, <c>itrform2.cxx</c>:2279-2284).
+    /// </para>
+    /// </remarks>
+    internal static (Length Height, Length Baseline, Length SpaceAbove) OnGrid(
+        TextGridSnap grid, LineSpacingRule rule, Length natural, Length ascent, bool isFirst)
+    {
+        if (!grid.Snaps) return (natural, ascent, Length.Zero);
+
+        long text = natural.Twips;
+        long pitch = Math.Max(1, grid.Pitch.Twips);
+        long line = pitch * ((text + pitch - 1) / pitch);
+
+        switch (rule.Mode)
+        {
+            case LineSpacingMode.AtLeast:
+                if (rule.Value.Twips == 0) line = text;
+                if (line < rule.Value.Twips) line = rule.Value.Twips;
+                break;
+
+            case LineSpacingMode.Exact:
+                line = rule.Value.Twips;
+                break;
+        }
+
+        long baseline = ascent.Twips + (line - text) / 2;
+        long real = line;
+
+        if (!isFirst && rule.Mode == LineSpacingMode.Proportional)
+        {
+            real = Math.Max(100, rule.Percent) * line / 100;
+        }
+
+        // Only the proportional extra is space above the text in Writer's sense — the part
+        // `SwTextIter::CalcAscentAndHeight` adds to the ascent as `GetRealHeight() - Height()`. The
+        // centring is the line's own ascent (`SetAscent`), and is not the paragraph above's to give.
+        baseline += real - line;
+        return (Length.FromTwips(real), Length.FromTwips(baseline), Length.FromTwips(real - line));
+    }
+
+    /// <summary>What a paragraph on a text grid hands down; see <see cref="LaidOutParagraph.LeadingBelow"/>.</summary>
+    private static Length? GridLeadingBelow(ParagraphFormat paragraph, Length lastNatural)
+    {
+        if (paragraph.TextGrid is null) return null;
+        if (paragraph.LineSpacing.Mode != LineSpacingMode.Proportional) return Length.Zero;
+
+        long text = lastNatural.Twips;
+        return Length.FromTwips(Math.Max(0, paragraph.LineSpacing.Percent * text / 100 - text));
+    }
+
+    /// <summary>
+    /// Whether Writer would lay the paragraph out through <c>SwTextFrame::FormatEmpty</c> rather than
+    /// formatting it, as far as this layer can tell.
+    /// </summary>
+    /// <remarks>
+    /// The conditions <c>FormatEmpty</c> checks that a paragraph's format can answer
+    /// (<c>sw/source/core/text/porrst.cxx</c>:420-458): no text, start alignment, and a proportional rule
+    /// of a hundred per cent or more. Numbering, a footnote and anchored frames also refuse it; a reader
+    /// that knows of one does not set a grid on such a paragraph's empty line, or this answers as Writer
+    /// does for the common case.
+    /// </remarks>
+    private static bool IsFormattedEmpty(string text, ParagraphFormat paragraph)
+        => text.Length == 0
+           && paragraph.Alignment == TextAlignment.Start
+           && paragraph.LineSpacing.Mode == LineSpacingMode.Proportional
+           && paragraph.LineSpacing.Percent >= 100;
+
+    /// <summary>
     /// Where the baseline sits inside a line box, and how much of the box is empty above the text.
     /// </summary>
     /// <remarks>
@@ -562,10 +701,9 @@ public sealed class ParagraphLayouter
     /// precisely why it survived: no column of the corpus gate can see it.
     /// </para>
     /// </remarks>
-    private (Length Baseline, Length SpaceAbove) BaselineIn(
-        Length height, Length natural, Length emSize, LineSpacingMode mode)
-        => BaselineFrom(
-            height, natural, Length.FromTwips(_metrics.ScaledAscent(emSize).Twips), mode);
+    private static (Length Baseline, Length SpaceAbove) BaselineIn(
+        Length height, Length natural, Length ascent, LineSpacingMode mode)
+        => BaselineFrom(height, natural, ascent, mode);
 
     /// <summary>The same rule, against an ascent the caller has already resolved.</summary>
     /// <remarks>

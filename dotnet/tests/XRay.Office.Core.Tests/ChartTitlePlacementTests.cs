@@ -200,9 +200,84 @@ public class ChartTitlePlacementTests
         title.At.X.ShouldBeGreaterThan(drawing.PlotArea.Right);
         title.At.X.ShouldBeLessThan(Frame.Right);
 
-        // Centred on the plot area's own height, exactly as the primary axis' title is.
+        // Centred on the diagram rectangle's height, exactly as the primary axis' title is — see
+        // TheValueAxisTitleIsCentredOnTheDiagramWithItsAxes.
         title.At.Y.Points.ShouldBe(
-            (drawing.PlotArea.Y + drawing.PlotArea.Height / 2).Points, 0.001);
+            (drawing.DiagramArea.Y + drawing.DiagramArea.Height / 2).Points, 0.001);
+    }
+
+    /// <summary>
+    /// The value axis' title is centred on the diagram with its axes, the category labels' band
+    /// included, and set two per cent of the chart's width outside it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>changePositionOfAxisTitle</c>'s <c>ALIGN_LEFT</c> arm in 26.2.4.2 and 26.8.1.1
+    /// (<c>ChartView.cxx:1016-1019</c> at tag 26.8.1.1): <c>x = rect.X - w/2 - pageWidth * 0.02</c>,
+    /// <c>y = rect.Y + rect.Height/2</c>. Master's tdf#159450 centres it on the plot area alone, and
+    /// that is what this drew until it was measured against 26.8.1.1 on
+    /// <c>chart-bar-deck.pptx</c>: 4.1 pt too high and 3.9 pt too far left.
+    /// </para>
+    /// <para>
+    /// The two centres differ by half the category labels' band, so the test fails under the
+    /// plot-area rule as well as under the frame-edge one it replaced across.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void TheValueAxisTitleIsCentredOnTheDiagramWithItsAxes()
+    {
+        ChartDrawing drawing = Place(Bars() with { Direction = ChartBarDirection.Column });
+
+        ChartLabel title = drawing.Labels.Single(label => label.Text == "Gallons Per Hour");
+        DocRect diagram = drawing.DiagramArea;
+
+        Length diagramCentre = diagram.Y + diagram.Height / 2;
+        Length plotCentre = drawing.PlotArea.Y + drawing.PlotArea.Height / 2;
+        (diagramCentre - plotCentre).Points.ShouldBeGreaterThan(
+            1.0, "the arms must differ or the test proves nothing");
+
+        title.At.Y.Points.ShouldBe(diagramCentre.Points, 0.001);
+
+        // The rotated title's width is its shape's height: 1.15 em of text plus two 0.30 em
+        // insets.
+        Length width = drawing.Labels.Single(label => label.Text == "Gallons Per Hour").Size * 1.75;
+        title.At.X.Points.ShouldBe(
+            (diagram.X - width / 2 - Frame.Width * 0.02).Points, 0.01);
+    }
+
+    /// <summary>
+    /// A chart that states its inner plot rectangle has its axis titles placed against that plot
+    /// and its axis labels, not against the space the titles left.
+    /// </summary>
+    /// <remarks>
+    /// <c>aUsedOuterRect</c> is the diagram group's bounding box when <c>mbUseFixedInnerSize</c>
+    /// holds (<c>ChartView.cxx:726-732</c> at tag 26.8.1.1). On a probe whose inner layout puts
+    /// the plot at 20–75 % of the frame's height, 26.8.1.1 sets the category title 25.7 pt above
+    /// where the remaining-space rule put it, against the category labels' own bottom edge.
+    /// </remarks>
+    [Fact]
+    public void AStatedInnerPlotPlacesItsTitlesAgainstThePlotAndItsLabels()
+    {
+        ChartDrawing drawing = Place(Bars() with
+        {
+            Direction = ChartBarDirection.Column,
+            PlotAreaFraction = (0.25, 0.2, 0.5, 0.4),
+        });
+
+        ChartLabel below = drawing.Labels.Single(label => label.Text == "Aircraft Type");
+        ChartLabel beside = drawing.Labels.Single(label => label.Text == "Gallons Per Hour");
+        ChartLabel q1 = drawing.Labels.First(label => label.Text == "Q1");
+
+        // The category labels hang from the plot's bottom edge, one 1.15 em line deep.
+        Length labelsBottom = q1.At.Y + q1.Size * 1.15;
+        Length belowHeight = below.Size * 1.75;
+        below.At.Y.Points.ShouldBe(
+            (labelsBottom + Frame.Height * 0.02 + belowHeight / 2).Points, 0.01);
+
+        // And the plot sits well inside the frame, so the remaining-space rule would have put the
+        // title near the frame's bottom edge instead.
+        below.At.Y.Points.ShouldBeLessThan(Frame.Height.Points * 0.75);
+        beside.At.X.Points.ShouldBeGreaterThan(Frame.Width.Points * 0.10);
     }
 
     /// <summary>The category axis' title sits above a bottom legend, not on top of it.</summary>

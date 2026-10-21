@@ -47,6 +47,23 @@ internal static class SheetDrawingBounds
         SheetDrawing drawing, SheetGrid grid)
     {
         (long left, long top, long right, long bottom) = Frame(drawing, grid);
+
+        // A quarter-turned shape is drawn in its anchor reflected in `y = x`
+        // (`SheetPageGraphics.Reflected`), so its parts are laid out in that rectangle and its
+        // bound rect is taken from it too. Reading the unreflected frame put the print area round
+        // a different rectangle from the one painted: on a bar stated 236 x 79 pt and turned 90
+        // degrees, the block stopped 44 pt short of the drawn shape's right edge and the clip cut
+        // it to 192 pt, where 26.2.4.2 prints all 236 (`ScDrawLayer::GetPrintArea` asks the
+        // object's `GetCurrentBoundRect`, `drwlayer.cxx`:1400-1424, which is the turned shape).
+        if (drawing.QuarterTurnedAnchor)
+        {
+            long across = right - left;
+            long down = bottom - top;
+            long x = left + ((across - down) / 2);
+            long y = top + ((down - across) / 2);
+            (left, top, right, bottom) = (x, y, x + down, y + across);
+        }
+
         if (drawing.Parts.Count == 0) return (left, top, right, bottom);
 
         double width = right - left;
