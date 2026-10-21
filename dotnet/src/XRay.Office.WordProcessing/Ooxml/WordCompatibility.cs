@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Xml.Linq;
+using XRay.Office.Text.Layout;
 
 namespace XRay.Office.WordProcessing.Ooxml;
 
@@ -88,13 +89,13 @@ namespace XRay.Office.WordProcessing.Ooxml;
 ///     </description>
 ///   </item>
 ///   <item>
-///     <term><c>w:splitPgBreakAndParaMark</c>, <c>w:ulTrailSpace</c>,
+///     <term><c>w:splitPgBreakAndParaMark</c>,
 ///     <c>w:balanceSingleByteDoubleByteWidth</c>, <c>w:doNotVertAlignCellWithSp</c>,
-///     <c>w:adjustLineHeightInTable</c>, <c>w:doNotBreakWrappedTables</c></term>
+///     <c>w:doNotBreakWrappedTables</c></term>
 ///     <description>
 ///     <b>Identified, unread.</b> Each needs a feature this engine does not have yet — a
-///     paragraph mark that survives a page break, underline under a trailing blank, ideographic
-///     space balancing, floating anchors in cells, a text grid, and floating tables. Reading
+///     paragraph mark that survives a page break, ideographic
+///     space balancing, floating anchors in cells, and floating tables. Reading
 ///     them now would mean storing a flag nothing can act on.
 ///     </description>
 ///   </item>
@@ -194,6 +195,18 @@ public sealed record WordCompatibility(
     /// </remarks>
     public bool AddsParagraphSpacing => !HasSettingsPart || DoNotUseHtmlParagraphAutoSpacing;
 
+    /// <summary>
+    /// True when <c>w:ulTrailSpace</c> asks for a line's trailing blank to carry its underline —
+    /// <c>MS_WORD_UL_TRAIL_SPACE</c>. See <see cref="Layout.PageParagraph.DecoratesTrailingBlank"/>.
+    /// </summary>
+    public bool UnderlinesTrailingSpace { get; init; }
+
+    /// <summary>
+    /// True when <c>w:adjustLineHeightInTable</c> lets a table cell's lines snap to the page's text grid —
+    /// <c>ADJUST_TABLE_LINE_HEIGHTS_TO_GRID_HEIGHT</c> (tdf#167583). See <see cref="TextGridSnap"/>.
+    /// </summary>
+    public bool AdjustsLineHeightInTable { get; init; }
+
     /// <summary>Reads the compatibility block out of a <c>w:settings</c> root.</summary>
     /// <param name="settings">The <c>w:settings</c> element, or null.</param>
     public static WordCompatibility Read(XElement? settings)
@@ -208,7 +221,11 @@ public sealed record WordCompatibility(
             Word.IsOn(Word.Child(compat, "doNotExpandShiftReturn")),
             Word.IsOn(Word.Child(compat, "noLeading")),
             Word.IsOn(Word.Child(compat, "usePrinterMetrics")),
-            HasSettingsPart: true);
+            HasSettingsPart: true)
+        {
+            UnderlinesTrailingSpace = Word.IsOn(Word.Child(compat, "ulTrailSpace")),
+            AdjustsLineHeightInTable = Word.IsOn(Word.Child(compat, "adjustLineHeightInTable")),
+        };
     }
 
     /// <summary>

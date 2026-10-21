@@ -925,4 +925,14 @@ public sealed record PlacedTableCell
 
     /// <summary>Which row of the table it starts in.</summary>
     public int Row { get; init; }
+
+    /// <summary>
+    /// Whether the cell's text runs past the bottom of a row whose height is exact, so that its ink has
+    /// to be clipped to <see cref="Area"/>.
+    /// </summary>
+    /// <remarks>
+    /// Set only where the text overflows, so that a cell that fits is drawn without a clip and its
+    /// rendering keeps the bytes it had. See <c>TableLayouter.ClippedToExactRow</c>.
+    /// </remarks>
+    public bool ClipsContent { get; init; }
 }

@@ -422,33 +422,46 @@ public static class OfficeMathBox
 
     /// <summary>
     /// <c>SmOperNode::Arrange</c> — node.cxx:1515. The operator is set at
-    /// <see cref="DistOperatorSize"/> over the body's size and its limits go above and below it.
+    /// <see cref="DistOperatorSize"/> over the body's size, its limits go above and below the
+    /// <em>operator</em>, and that composite is then centred on the body.
     /// </summary>
+    /// <remarks>
+    /// StarMath parses <c>sum from a to b c</c> as <c>SmOperNode(SmSubSupNode(∑, csub a, csup b), c)</c>:
+    /// the limits are arranged around the symbol by <c>SmSubSupNode::Arrange</c> (node.cxx:1143) before
+    /// the operator meets its body, and <c>SmOperNode::Arrange</c> then aligns that whole operator to the
+    /// body (<c>AlignTo(*pBody, …, RectVerAlign::Mid)</c>, node.cxx:1545) and unions the two. Hanging the
+    /// limits off the union instead — which this did — puts them outside a body taller than the symbol, a
+    /// fraction in scaled brackets or a binomial: on <c>equations.docx</c> the two display formulas
+    /// <c>∑_{n=1}^{∞}(… over L …)</c> and <c>∑_{k=0}^{n}(binom n k …)</c> reserved 14.9 and 12.2 pt more than
+    /// 26.8.1.1's objects, and the trailing empty paragraph spilled onto a blank second page. A body
+    /// shorter than the symbol — every one-construct formula the box was validated on — comes out the
+    /// same either way.
+    /// </remarks>
     private static Rect Nary(XElement element, int fontHeight)
     {
         XElement? properties = Part(element, "naryPr");
         Rect body = Of(Part(element, "e"), fontHeight);
         Rect symbol = Blank(TextHeightAt(fontHeight * (100 + DistOperatorSize) / 100));
 
-        int dy = body.Height > 0 ? (body.Top + body.Bottom) / 2 - (symbol.Top + symbol.Bottom) / 2 : 0;
-        Rect result = body.Height > 0
-            ? Extend(body, symbol.Moved(dy), BaselineOf.This)
-            : symbol;
-
         int limitHeight = fontHeight > BaseSize / 3 ? fontHeight * RelLimits / 100 : fontHeight;
         int gap = fontHeight * DistLimit / 100;
 
+        Rect oper = symbol;
         if (!Flag(properties, "supHide") && Of(Part(element, "sup"), limitHeight) is { Height: > 0 } upper)
         {
-            result = Extend(result, upper.Moved(result.Top - upper.Bottom - gap), BaselineOf.This, keep: true);
+            oper = Extend(oper, upper.Moved(symbol.Top - upper.Bottom - gap), BaselineOf.This, keep: true);
         }
 
         if (!Flag(properties, "subHide") && Of(Part(element, "sub"), limitHeight) is { Height: > 0 } lower)
         {
-            result = Extend(result, lower.Moved(result.Bottom - lower.Top + gap), BaselineOf.This, keep: true);
+            oper = Extend(oper, lower.Moved(symbol.Bottom - lower.Top + gap), BaselineOf.This, keep: true);
         }
 
-        return result;
+        if (body.Height <= 0) return oper;
+
+        // The symbol's own centre on the body's, carrying its limits with it.
+        int dy = (body.Top + body.Bottom) / 2 - (symbol.Top + symbol.Bottom) / 2;
+        return Extend(body, oper.Moved(dy), BaselineOf.This);
     }
 
     /// <summary>

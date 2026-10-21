@@ -422,6 +422,26 @@ public sealed record PageParagraph : PageBlock
     public bool BlanksAreTransparentToHeight { get; init; }
 
     /// <summary>
+    /// True when a line's trailing blanks carry the underline or strikethrough of the text before them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// tdf#168777, in 26.2.4.2 and 26.8.1.1 alike: a line's trailing blanks become a hole portion that
+    /// paints its decorations when <c>!MS_WORD_COMP_TRAILING_BLANKS || MS_WORD_UL_TRAIL_SPACE</c>
+    /// (<c>IsPaintTrailingSpaceDecorations</c>, <c>sw/source/core/text/portxt.cxx</c>:251-258), with the
+    /// font of the portion before it. In a PDF the hole is drawn as <em>one</em> blank whatever its length
+    /// (<c>SwHolePortion::Paint</c>, :1418-1421), and only when that blank fits the room left on the line
+    /// (<c>GetLimitedStringPart</c>, :966-990). No background: the PDF branch draws no brush.
+    /// </para>
+    /// <para>
+    /// Set by the DOCX reader for a document stating <c>w:compat/w:ulTrailSpace</c>, which is
+    /// <c>MS_WORD_UL_TRAIL_SPACE</c>. Native ODF, whose trailing blanks Writer keeps by default, wants it
+    /// too and is not set here.
+    /// </para>
+    /// </remarks>
+    public bool DecoratesTrailingBlank { get; init; }
+
+    /// <summary>
     /// True when this paragraph's lines carry no margin line number and do not advance the count.
     /// </summary>
     /// <remarks>
@@ -717,8 +737,15 @@ public sealed record PageParagraph : PageBlock
                 Tracking: Tracking, WidthPerCent: WidthPerCent, Item: Item));
         }
 
+        // A paragraph on a page's text grid does not take Word's 127 % East Asian line height:
+        // 26.8.1.1's `SwTextFormatter::CalcAscent` asks `pGrid && rInf.SnapToGrid()` first (tdf#171275).
+        // Nor does an empty paragraph, whose line holds no text portion for `CalcAscent` to scale.
+        MetricGrid? metrics = (Format.TextGrid is not null || Text.Length == 0) && Metrics is { } grid
+            ? grid with { ScalesEastAsianFaces = false }
+            : Metrics;
+
         return MeasuredParagraph.Measure(
-            Text, runs, shaper: null, Itemisation, MeasurementObjects(), Metrics,
+            Text, runs, shaper: null, Itemisation, MeasurementObjects(), metrics,
             BlanksAreTransparentToHeight, WriterLineBox.LeadingAboveText, AddsScriptSpace);
     }
 

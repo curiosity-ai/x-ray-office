@@ -58,6 +58,34 @@ public enum LineSpacingMode
 }
 
 /// <summary>
+/// A paragraph's lines snapped to a page's text grid — Writer's Asian layout grid, which DOCX states as
+/// <c>w:docGrid</c> with a <c>w:type</c> other than <c>default</c>.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <c>SwTextFormatter::CalcRealHeight</c>'s grid branch (<c>sw/source/core/text/itrform2.cxx</c>:2275-2345,
+/// identical in 26.8.1.1) replaces the line spacing rule rather than adding to it: a line is as many whole
+/// pitches as its text needs, <c>pitch * ceil(height / pitch)</c>, its text centred in them; an at-least rule
+/// raises that to its value and a rule of exactly some height replaces it (tdf#164871), an at-least of
+/// nought meaning the text's own height (Word's own idiosyncrasy, which the same commit emulates); and a
+/// proportional rule reaches only a paragraph's second and later lines, never below single. The ruby
+/// height a DOCX grid carries is always nought (<c>SectionPropertyMap::CloseSectionGroup</c>,
+/// <c>sw/source/writerfilter/dmapper/PropertyMap.cxx</c>:2036), so the pitch is the whole grid line.
+/// </para>
+/// <para>
+/// A paragraph that snaps also loses Word's 127 % East Asian line height (tdf#171275).
+/// </para>
+/// </remarks>
+/// <param name="Pitch">The grid's line pitch, in whole twips.</param>
+/// <param name="Snaps">
+/// False for a paragraph in a table cell on a grid page whose document does not state
+/// <c>w:adjustLineHeightInTable</c>: Writer then keeps the line at its text's own height and applies no line
+/// spacing at all (tdf#88752, tdf#167583, the early return at <c>itrform2.cxx</c>:2279-2284), while the
+/// East Asian height stays off because the paragraph still snaps.
+/// </param>
+public readonly record struct TextGridSnap(Length Pitch, bool Snaps = true);
+
+/// <summary>
 /// How far apart a paragraph's baselines sit.
 /// </summary>
 /// <remarks>
@@ -205,13 +233,19 @@ public readonly record struct LineSpacingRule(
     /// rather than rounds — <c>nTmp -= 100; nTmp *= baseHeight; nTmp /= 100</c> in
     /// <c>CalcRealHeight</c>. Rounding instead would be off by a twip on most sizes.
     /// </remarks>
-    private long Extra(long naturalTwips)
-    {
-        double clamped = Math.Clamp(Proportion, 0.0, MaxProportion);
-        long percent = clamped <= 0 ? 100 : (long)Math.Round(clamped * 100);
-        if (percent < MinProportion * 100) percent = (long)(MinProportion * 100);
+    private long Extra(long naturalTwips) => (Percent - 100) * naturalTwips / 100;
 
-        return (percent - 100) * naturalTwips / 100;
+    /// <summary>
+    /// The proportion as Writer's whole-number percentage, clamped as <c>CalcRealHeight</c> clamps it.
+    /// </summary>
+    internal long Percent
+    {
+        get
+        {
+            double clamped = Math.Clamp(Proportion, 0.0, MaxProportion);
+            long percent = clamped <= 0 ? 100 : (long)Math.Round(clamped * 100);
+            return percent < MinProportion * 100 ? (long)(MinProportion * 100) : percent;
+        }
     }
 }
 
@@ -353,6 +387,17 @@ public sealed record ParagraphFormat
 
     /// <summary>How far apart the baselines sit.</summary>
     public LineSpacingRule LineSpacing { get; init; } = LineSpacingRule.SingleSpaced;
+
+    /// <summary>
+    /// The page's text grid, when the paragraph snaps to one; null when it does not.
+    /// </summary>
+    /// <remarks>
+    /// Set by a reader only where Writer's <c>SwTextSizeInfo::SnapToGrid</c> would be true — the paragraph's
+    /// own <c>w:snapToGrid</c> (on by default) on a body paragraph (<c>IsInDocBody</c>,
+    /// <c>sw/source/core/text/inftxt.cxx</c>:334) — and the page style declares a grid. A header, a footer,
+    /// a note and a text box are not in the document body and never snap. See <see cref="TextGridSnap"/>.
+    /// </remarks>
+    public TextGridSnap? TextGrid { get; init; }
 
     /// <summary>The paragraph's own tab stops, in ascending position order.</summary>
     public IReadOnlyList<TabStop> TabStops { get; init; } = [];

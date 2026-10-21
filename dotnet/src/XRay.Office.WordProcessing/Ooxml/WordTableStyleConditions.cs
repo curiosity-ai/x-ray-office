@@ -117,10 +117,12 @@ public readonly record struct WordTableLook(
 /// (<c>probes/words-r63/tblstylepr-census.py</c>).
 /// </para>
 /// <para>
-/// <b>The <c>w:pPr</c> and <c>w:tblPr</c> halves of a layer are still not applied</b>, and that is
-/// scope rather than principle. The <c>w:tcPr</c> half is, for shading only: 749 cells in 42
-/// documents (<c>probes/words-r63/tblstyle-reach.py</c>). A layer's <c>w:tcBorders</c> is read by
-/// nothing, which is one of the eight strokes <c>012</c> is still missing.
+/// <b>The <c>w:pPr</c> half and the <c>w:tcBorders</c> of the <c>w:tcPr</c> half are applied the way
+/// writerfilter applies them</b>, through <see cref="WordStyles.TableStyleWriterLayers"/> rather than
+/// through <see cref="Names"/>: the named style's own layers only, in <c>aOrderedStyleTable</c>'s order,
+/// with a <c>w:tblLook</c> bit cleared where the style defines no such layer and bands one row wide.
+/// The shading and run halves keep the older resolution, which was measured on its own documents.
+/// The <c>w:tblPr</c> half is still not applied.
 /// </para>
 /// </remarks>
 /// <param name="Look">Which layers the table switched on.</param>

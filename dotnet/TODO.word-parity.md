@@ -327,6 +327,31 @@ fixed, which was ours and is in `probes/docsection-r184/` as well.
 
 ---
 
+## A table style's `w:contextualSpacing` does not reach its cells
+
+**26.8.1.1** (and 26.2.4.2): a table style whose own `w:pPr` states `w:contextualSpacing` leaves the
+gap between same-style paragraphs in its cells standing. `DomainMapperTableHandler::endTable` hands the
+style's paragraph properties to `ApplyParagraphPropertiesFromTableStyle` after erasing whatever
+`isParagraphProperty` rejects, and `PROP_PARA_CONTEXT_MARGIN` was declared outside the enumerator range
+that test reads — so the property has never reached a paragraph. Fixed upstream after the 26.8 branch
+(`5dc72823c12d`, *sw: apply the contextual spacing that a table style sets*, master only; not in the
+`libreoffice-26.8.1.1` tag), whose message says Word applies it.
+
+**Word**: applies it.
+
+**This tree**: applies it, as it always has — the table style is one of the layers
+`WordParagraphFormats` resolves `w:contextualSpacing` through. `XRAY_OFFICE_LIBREOFFICE_QUIRKS=1`
+drops the table-style layer for this property alone. Measured on an authored DOCX — three `Body`
+paragraphs with `w:after="240"` in one cell of a table whose style states only
+`<w:pPr><w:contextualSpacing/></w:pPr>`: 26.8.1.1 sets the three 12 pt apart and the paragraphs after
+the table 24 pt lower than this tree (`probes/words-tblctx-r268/`).
+With the switch on, this tree draws that probe exactly where 26.8.1.1 does. `TableStyleContextualSpacingTests` pins the default.
+
+**Reach**: none measured — 0 of the 15 DOCX in `test_documents`, and the sample corpus was not
+available to the round that wrote this.
+
+---
+
 ## Still LibreOffice's reading, and why
 
 These are places where this tree recomputes a field that Word would leave at its cache, and they

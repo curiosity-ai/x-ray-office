@@ -123,11 +123,11 @@ public enum MetricUnit
 /// </param>
 /// <param name="ScalesEastAsianFaces">
 /// Whether Word's <c>MS_WORD_COMP_GRID_METRICS</c> compatibility rule applies: a face declaring one of
-/// four East Asian code pages has its ascent, and its ascent and descent together, scaled by 127%
-/// before the leading is added. See <see cref="AsWordDocument"/> and <see cref="EastAsianScaled"/>.
+/// four East Asian code pages has a text line's height, leading included, scaled by 127% and the
+/// increase given to its ascent. See <see cref="AsWordDocument"/> and <see cref="EastAsianScaled"/>.
 /// <para>
 /// <b>Only ever true on a Writer grid</b>, and the two rules on this type are orthogonal because of
-/// it: this one is <c>SwFntObj</c>'s, and the taller-of-two-roundings in
+/// it: this one is Writer's formatter's, and the taller-of-two-roundings in
 /// <see cref="LineMetrics.ScaledLineHeight"/> is EditEngine's. See <see cref="EastAsianScaled"/>.
 /// </para>
 /// </param>
@@ -227,13 +227,14 @@ public readonly record struct MetricGrid(
     /// the device, and it is off by default — <c>DocumentSettingManager</c> initialises
     /// <c>mbMsWordCompGridMetrics(false)</c>, and an ODF file carries its own value. So the DOC and
     /// DOCX readers ask for this and the ODF one does not, which is measured rather than reasoned:
-    /// the same two lines of WenQuanYi Zen Hei at 12 pt are 406 twips apart when LibreOffice reads
-    /// them from a <c>.docx</c> and 325 apart when it reads them from a <c>.fodt</c>.
+    /// the same two lines of WenQuanYi Zen Hei at 12 pt are 406 twips apart when LibreOffice 26.2.4.2
+    /// reads them from a <c>.docx</c> (412 on 26.8.1.1) and 325 apart when it reads them from a
+    /// <c>.fodt</c>.
     /// </para>
     /// <para>
     /// Applied to whichever grid the document already asked for, because the flag and the device are
-    /// independent in the C++ too: every call site of <c>lcl_ApplyCjkHeightAdjustment</c> passes the
-    /// reference device it happens to have and asks the document for the flag separately. The
+    /// independent in the C++ too: <c>SwTextFormatter::CalcAscent</c> asks the font on the reference
+    /// device it happens to have for its code pages and the document for the flag separately. The
     /// printer combination is unmeasured — no corpus document sets <c>usePrinterMetrics</c> and
     /// names an East Asian face — and is written this way because that is what the C++ does, not
     /// because it has been seen.
@@ -246,23 +247,32 @@ public readonly record struct MetricGrid(
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <c>lcl_ApplyCjkHeightAdjustment</c> (<c>sw/source/core/txtnode/fntcache.cxx</c>:270-292,
-    /// tdf#129808): with <c>MS_WORD_COMP_GRID_METRICS</c> set and the face declaring CP932, CP936,
-    /// CP949 or CP950, <c>(nBase * 127) / 100</c> — integer division, on the value in twips.
+    /// tdf#129808: with <c>MS_WORD_COMP_GRID_METRICS</c> set and the face declaring CP932, CP936,
+    /// CP949 or CP950, <c>(nHeight * 127) / 100</c> — integer division, on the value in twips.
     /// </para>
     /// <para>
-    /// <b>What it multiplies is not the finished line height.</b> <c>GetFontHeight</c> reads
-    /// <c>lcl_ApplyCjkHeightAdjustment(m_nPrtHeight, …) + GetFontLeading(…)</c>, so the scale
-    /// reaches the device's ascent-plus-descent and the face's leading is added afterwards,
-    /// unscaled; <c>GetFontAscent</c> is the same shape. That distinction is invisible on IPAGothic,
-    /// whose <c>hhea</c> line gap is zero — which is why <c>probes/lineheight-01</c> §7(a) recorded
-    /// the rule as scaling the height itself and was exact on all 39 of its pairs anyway. WenQuanYi
-    /// Zen Hei has a gap of 92/1024 and separates them: at 12 pt the two rules give 412 twips and
-    /// 406, and LibreOffice draws 406. See <c>probes/words-metrics-01/probe-cjk127.py</c>, which
-    /// scores both against 117 measured pairs over three faces — this rule 117, the other 78.
+    /// <b>This is 26.8.1.1's form, tdf#171275 (backport 4281a0ace61a), and it is not 26.2.4.2's.</b>
+    /// The scale moved from <c>SwFntObj::GetFontHeight</c>/<c>GetFontAscent</c>, which scaled the
+    /// ascent-plus-descent and added the leading afterwards, into <c>SwTextFormatter::CalcAscent</c>,
+    /// which scales the portion's whole height — leading included — and keeps its descent, so the whole
+    /// increase goes to the ascent: <c>nAdjustedHeight = (nHeight * 127) / 100;
+    /// nAdjustedAscent = nAdjustedHeight - (nHeight - nAscent)</c>. On IPAGothic, whose line gap is
+    /// zero, the line is as tall as 26.2.4.2 drew it and the baseline is lower by 27 % of the descent; on WenQuanYi Zen
+    /// Hei, gap 92/1024, the line is 412 twips at 12 pt where 26.2.4.2 drew 406.
+    /// <c>probes/words-textgrid-r268/probe-cjk127-268.py</c>, the same probe re-run against 26.8.1.1: it
+    /// is exact on 117 of 117 ascents and 117 of 117 line heights over three faces, where 26.2.4.2's
+    /// rule now scores 39 and 78.
+    /// </para>
+    /// <para>
+    /// Two halves of the backport are not in this method, because they decide whether it is asked at
+    /// all: the scale is skipped for a paragraph that snaps to a page's text grid
+    /// (<c>ParagraphFormat.TextGrid</c>), and it no longer reaches an empty paragraph, whose line holds no
+    /// text portion — its height comes from <c>SwFont::GetHeight</c>, which the backport left unscaled.
+    /// Measured on an authored DOCX of WenQuanYi Zen Hei paragraphs at 12 pt: an empty one is 16.25 pt on
+    /// 26.8.1.1, a line of text 20.60.
     /// </para>
     /// </remarks>
-    /// <param name="value">The ascent, or the ascent and descent together, before the leading.</param>
+    /// <param name="value">The ascent, descent and leading together.</param>
     /// <param name="face">Whether the face declares one of the four East Asian code pages.</param>
     public Length EastAsianScaled(Length value, bool face)
         => ScalesEastAsianFaces && face
@@ -686,8 +696,8 @@ public readonly record struct LineMetrics(
     public Length ScaledLineHeight(Length emSize)
         => Grid is { } grid
             ? LeadingAboveText
-                ? grid.EastAsianScaled(TextHeightOn(grid, emSize), DeclaresEastAsianCodePage)
-                  + LeadingOn(grid, emSize)
+                ? grid.EastAsianScaled(
+                    TextHeightOn(grid, emSize) + LeadingOn(grid, emSize), DeclaresEastAsianCodePage)
                 : EditHeightOn(grid, emSize)
             : Scale(LineHeight, emSize);
 
@@ -741,9 +751,14 @@ public readonly record struct LineMetrics(
         //
         // It matters because `ScaledDescent` is `height − ascent`: a grid that scaled the ascent
         // while the height took EditEngine's branch could return a negative descent.
-        return LeadingAboveText
-            ? grid.EastAsianScaled(ascent, DeclaresEastAsianCodePage) + LeadingOn(grid, emSize)
-            : ascent;
+        if (!LeadingAboveText) return ascent;
+
+        // 26.8.1.1 gives the whole of the East Asian increase to the ascent: the height-with-leading is
+        // scaled and the descent kept, so the ascent grows by what the height grew by. See
+        // `MetricGrid.EastAsianScaled`.
+        Length leading = LeadingOn(grid, emSize);
+        Length height = TextHeightOn(grid, emSize) + leading;
+        return ascent + leading + (grid.EastAsianScaled(height, DeclaresEastAsianCodePage) - height);
     }
 
     /// <summary>The descent at an em size.</summary>

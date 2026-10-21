@@ -80,6 +80,34 @@ public sealed class HighlightTests
     }
 
     /// <summary>
+    /// Proportional spacing below single shrinks the band: by the percentage on the paragraph's first line,
+    /// and by it again on every later one, whose portion the line has already shrunk.
+    /// </summary>
+    /// <remarks>
+    /// <c>SwTextPaintInfo::CalcRect</c>, as 26.8.1.1 has it after tdf#170635. Measured at 75 % on an
+    /// authored DOCX and an authored flat ODT, both renderings agreeing: 9.95 pt on the first line and
+    /// 7.55 pt on the second, against an unshrunk 13.3.
+    /// </remarks>
+    [Fact]
+    public void ProportionalSpacingBelowSingleShrinksTheBand()
+    {
+        PageParagraph paragraph = Highlighted("plain and lit", from: 10, to: 13, Colour.FromRgb(0xFFFF00)) with
+        {
+            Format = new ParagraphFormat { LineSpacing = LineSpacingRule.Multiple(0.75) },
+        };
+
+        LineMetrics metrics = LineSpacing.Resolve(
+            Face, MetricGrid.Reference, WriterLineBox.LeadingAboveText);
+        Length natural = metrics.ScaledLineHeight(Size);
+
+        Draw(paragraph).Item2[0].Area.Height.ShouldBe(natural * 75 / 100);
+        Draw(paragraph, lineIndex: 1).Item2[0].Area.Height.ShouldBe(natural * 75 / 100 * 75 / 100);
+
+        PageParagraph single = paragraph with { Format = new ParagraphFormat() };
+        Draw(single, lineIndex: 1).Item2[0].Area.Height.ShouldBe(natural);
+    }
+
+    /// <summary>
     /// <c>w:highlight</c> names a colour from a closed list, and the list is not the obvious one.
     /// </summary>
     /// <remarks>
@@ -117,13 +145,13 @@ public sealed class HighlightTests
     }
 
     private static (List<(GlyphRun Run, Colour Colour)>, List<(DocRect Area, Colour Colour)>) Draw(
-        PageParagraph paragraph)
+        PageParagraph paragraph, int lineIndex = 0)
     {
         DocRect area = new(Length.Zero, Length.Zero, Length.FromPoints(400), Length.FromPoints(400));
         List<(DocRect Area, Colour Colour)> bands = [];
 
         List<(GlyphRun Run, Colour Colour)> runs =
-            PageDrawing.RunsIn(area, Line(paragraph), paragraph, bands);
+            PageDrawing.RunsIn(area, Line(paragraph) with { LineIndex = lineIndex }, paragraph, bands);
 
         return (runs, bands);
     }

@@ -355,8 +355,11 @@ internal static class WordParagraphFormats
 
             SpaceBefore = AutoOr(spacings, "beforeAutospacing", "before", auto),
             SpaceAfter = AutoOr(spacings, "afterAutospacing", "after", auto),
+            // A table style's own `w:contextualSpacing` reaches its cells as it does in Word; 26.8.1.1
+            // drops it, and the switch reproduces that. See `TODO.word-parity.md`.
             HasContextualSpacing =
-                IsOn(styles, paragraphProperties, styleId, "contextualSpacing", tableStyle),
+                IsOn(styles, paragraphProperties, styleId, "contextualSpacing",
+                     WordParity.ReproduceLibreOffice ? null : tableStyle),
 
             // Which style, for the "same style" half of contextual spacing. Already resolved to the
             // document's default when the paragraph names none, so two unstyled paragraphs match.
@@ -1065,6 +1068,51 @@ internal static class WordParagraphFormats
     }
 
     /// <summary>
+    /// Whether the interop grab bag writerfilter would give a paragraph holds an auto-spacing entry —
+    /// whatever its value.
+    /// </summary>
+    /// <remarks>
+    /// For <c>DocxLayoutSource.SuppressAutoSpacingInLists</c>, whose rule asks about the entry's
+    /// <em>name</em>: <c>w:beforeAutospacing="0"</c> inserts one as surely as <c>"1"</c> does. The
+    /// innermost layer holding any grab-bag entry decides, because a paragraph's direct grab bag, like a
+    /// style's, replaces the one beneath it rather than adding to it.
+    /// </remarks>
+    /// <param name="styles">The document's styles.</param>
+    /// <param name="paragraphProperties">The paragraph's own <c>w:pPr</c>, or null.</param>
+    /// <param name="before">True for <c>ParaTopMarginBeforeAutoSpacing</c>, false for the bottom twin.</param>
+    internal static bool GrabBagStatesAutoSpacing(
+        WordStyles styles,
+        XElement? paragraphProperties,
+        bool before)
+    {
+        ArgumentNullException.ThrowIfNull(styles);
+
+        string attribute = before ? "beforeAutospacing" : "afterAutospacing";
+
+        // A paragraph's own interop grab bag replaces its style's whole, so the first layer holding any
+        // grab-bag entry answers: the two auto-spacing statements, and a paragraph's `w:cnfStyle`, which
+        // writerfilter files there too (`DomainMapper.cxx`:3820).
+        if (Word.Child(paragraphProperties, "spacing") is { } own && HoldsGrabBag(own))
+            return Word.Attribute(own, attribute) is not null;
+
+        if (Word.Child(paragraphProperties, "cnfStyle") is not null) return false;
+
+        string? styleId = Word.Attribute(Word.Child(paragraphProperties, "pStyle"), "val")
+                          ?? styles.DefaultStyleId(WordStyleType.Paragraph);
+
+        foreach (XElement layer in styles.ParagraphPropertyLayers("spacing", null, styleId))
+        {
+            if (HoldsGrabBag(layer)) return Word.Attribute(layer, attribute) is not null;
+        }
+
+        return false;
+
+        static bool HoldsGrabBag(XElement spacing)
+            => Word.Attribute(spacing, "beforeAutospacing") is not null
+               || Word.Attribute(spacing, "afterAutospacing") is not null;
+    }
+
+    /// <summary>
     /// Whether a paragraph's space before or after is the HTML auto margin rather than a stated one.
     /// </summary>
     /// <remarks>
@@ -1174,10 +1222,19 @@ internal static class WordParagraphFormats
     private static LineSpacingRule Spacing(XElement? spacing)
     {
         if (Word.Attribute(spacing, "line") is not { } text
-            || !Word.Long(text, out long line)
-            || line == 0)
+            || !Word.Long(text, out long line))
         {
             return LineSpacingRule.SingleSpaced;
+        }
+
+        // An at-least rule of nought is kept, because it is not single spacing everywhere: on a page's text
+        // grid it takes the line off the grid altogether (tdf#164871, `itrform2.cxx`:2298-2306). Off the
+        // grid `max(natural, 0)` is the natural height, which is what single spacing gave it.
+        if (line == 0)
+        {
+            return Word.Attribute(spacing, "lineRule") == "atLeast"
+                ? LineSpacingRule.AtLeast(Length.Zero)
+                : LineSpacingRule.SingleSpaced;
         }
 
         return Word.Attribute(spacing, "lineRule") switch
