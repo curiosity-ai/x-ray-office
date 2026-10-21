@@ -355,7 +355,7 @@ public static class OdfChartPlot
                 Child(chart, OdfNamespaces.Chart, "legend"), OdfNamespaces.Chart, "style-name")),
             IsLegendBold = styles.IsBold(Attribute(
                 Child(chart, OdfNamespaces.Chart, "legend"), OdfNamespaces.Chart, "style-name")),
-            PlotArea = Region(plotArea),
+            PlotArea = Region(plotArea, styles),
             Space = SpaceOf(chart),
 
             // chart:filled-radar is the only radar class that fills; chart:radar draws a stroked
@@ -973,9 +973,28 @@ public static class OdfChartPlot
     /// that one looked entirely correct and quietly sent two ODF charts in three through the OOXML
     /// heuristic.
     /// </para>
+    /// <para>
+    /// <strong>And it is ignored whenever the plot area's style says it is automatic.</strong>
+    /// <c>SchXMLPlotAreaContext::endFastElement</c> hands the diagram a stated rectangle only
+    /// under <c>!m_aOuterPositioning.isAutomatic()</c>
+    /// (<c>xmloff/source/chart/SchXMLPlotAreaContext.cxx:565-580</c>), and <c>isAutomatic</c> is
+    /// <c>m_bAutoSize || m_bAutoPosition</c> (<c>:814-817</c>), read from the style's
+    /// <c>chart:auto-size</c> and <c>chart:auto-position</c> and false when neither is stated
+    /// (<c>:804-805</c>, <c>:860-868</c>). LibreOffice's exporter writes the rectangle it laid the
+    /// chart out at <em>and</em> marks it automatic, so a file stating both agreed with its writer
+    /// by construction and the difference never showed — until the reference's own automatic
+    /// layout moved. Measured against the 26.8 daily (2026-10-21) on four one-attribute variants of
+    /// <c>chart-bar-deck.odp</c>: with both flags false it draws the stated 2.258, 1.594,
+    /// 17.674 × 8.538 cm exactly; with either or both true it draws 2.340, 1.572, 17.566 × 8.496,
+    /// its own automatic answer.
+    /// </para>
     /// </remarks>
-    private static DocRect? Region(XElement plotArea)
+    private static DocRect? Region(XElement plotArea, OdfChartStyles styles)
     {
+        string? style = Attribute(plotArea, OdfNamespaces.Chart, "style-name");
+        if ((styles.Flag(style, "auto-position") ?? false) || (styles.Flag(style, "auto-size") ?? false))
+            return null;
+
         // Both spellings, and the extension one is the commoner: 47 of the 71 charts in
         // chart2/qa/extras/data/ that state a coordinate region at all write it as
         // chartooo:coordinate-region. See OdfNamespaces.ChartExtension.

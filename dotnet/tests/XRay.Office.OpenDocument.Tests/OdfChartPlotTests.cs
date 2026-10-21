@@ -99,6 +99,51 @@ public class OdfChartPlotTests
     }
 
     /// <summary>
+    /// A coordinate region under a plot-area style that says <c>chart:auto-position</c> or
+    /// <c>chart:auto-size</c> is a record of where the writer put the plot, not an instruction,
+    /// and the chart is laid out automatically.
+    /// </summary>
+    /// <remarks>
+    /// <c>SchXMLPlotAreaContext::endFastElement</c> applies a stated rectangle only under
+    /// <c>!m_aOuterPositioning.isAutomatic()</c>, and <c>isAutomatic</c> is
+    /// <c>m_bAutoSize || m_bAutoPosition</c>
+    /// (<c>xmloff/source/chart/SchXMLPlotAreaContext.cxx:565-580</c>, <c>:814-817</c>). Measured
+    /// against the 26.8 daily on 2026-10-21 with four one-attribute variants of
+    /// <c>chart-bar-deck.odp</c>: both flags false draws the stated 2.258 cm; either or both true
+    /// draws its own 2.340 cm. LibreOffice writes both flags true on every chart nobody dragged,
+    /// so this decides almost every ODF chart there is; the corpus deck states both.
+    /// </remarks>
+    [Theory]
+    [InlineData("true", "true", false)]
+    [InlineData("true", "false", false)]
+    [InlineData("false", "true", false)]
+    [InlineData("false", "false", true)]
+    public void AnAutomaticPlotAreaIgnoresItsStatedRegion(string position, string size, bool stated)
+    {
+        ChartPlot plot = Read(
+            """
+            <chart:coordinate-region svg:x="2.258cm" svg:y="1.594cm"
+                                     svg:width="17.674cm" svg:height="8.538cm"/>
+            """,
+            styles: $"""
+                     <style:style style:name="pa" style:family="chart">
+                       <style:chart-properties chart:auto-position="{position}" chart:auto-size="{size}"/>
+                     </style:style>
+                     """,
+            plotStyle: """chart:style-name="pa" """);
+
+        if (stated)
+        {
+            plot.PlotArea.ShouldNotBeNull();
+            plot.PlotArea!.Value.X.Mm100.ShouldBe(2258);
+        }
+        else
+        {
+            plot.PlotArea.ShouldBeNull();
+        }
+    }
+
+    /// <summary>
     /// A plot area's <c>chart:data-label-number</c> labels every series under it.
     /// </summary>
     /// <remarks>
