@@ -748,6 +748,19 @@ internal static class SheetTextLayout
             if (run.Width <= available) area = area.Unclipped();
         }
 
+        // A fill-aligned cell repeats its whole text across its own column, once the text fits
+        // it: `ScOutputData::LayoutStrings` (`sc/source/ui/view/output2.cxx`:1895-1914 in
+        // 26.8.1.1). Only on this path — an edit cell, a field or one holding an EditEngine
+        // character is drawn by `DrawEdit`, which has no repeat — and only when nothing is
+        // clipped, so text wider than its cell is shortened like any other.
+        if (fills && !area.IsClipped && portions is null && !cell.IsField
+            && !HasEditCharacters(text, fillAt) && !IsEditCell(text, portions)
+            && Repeated(text, run.Width, cell.Box.Width, leftTotal, margin) is { } repeated)
+        {
+            text = repeated;
+            run = ShapeRange(0, text.Length, percent) ?? run;
+        }
+
         bool hashed = false;
         if (isValue && area.IsClipped)
         {
@@ -1251,6 +1264,49 @@ internal static class SheetTextLayout
 
         int count = (int)(spaceToFill / averageWidth);
         return count <= 0 ? null : text.Insert(at, new string(fill, count));
+    }
+
+    /// <summary>
+    /// A fill-aligned cell's text repeated as many whole times as its column holds, or null when
+    /// it holds fewer than two.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>output2.cxx</c>:1895-1914 in 26.8.1.1: the count is
+    /// <c>(alignWidth − totalMargin) / textWidth</c>, integer division, the align rectangle being
+    /// the cell's own because a repeating cell never borrows from a neighbour. Below two nothing
+    /// changes.
+    /// </para>
+    /// <para>
+    /// <strong>The unit is fitted, not read.</strong> The source counts in the output device's
+    /// pixels and adds one to the text width when the format device is not the reference device.
+    /// Measured on 26.8.1.1 over 151 fill cells of <c>probes/calc-anchor-r26</c>'s
+    /// <c>fill2.xlsx</c> (nine texts, three sizes, twenty-four column widths), whole
+    /// hundredths of a millimetre for both the room and the rounded text width reproduce 148
+    /// counts, where 720 dpi pixels reproduce 134 without the extra pixel and 94 with it, and
+    /// exact points 144. The three that miss are each a ratio within 0.3% above a whole number.
+    /// </para>
+    /// <para>
+    /// Master's bf588c5d9a82 measures the repeat from a twenty-character sample instead; that is
+    /// not in 26.8.1.1 and is not ported.
+    /// </para>
+    /// </remarks>
+    private static string? Repeated(
+        string text, Length textWidth, Length cellWidth, Length leftTotal, Length rightMargin)
+    {
+        const long EmuPerMm100 = 360;
+
+        if (text.Length == 0) return null;
+
+        long available = (cellWidth - leftTotal - rightMargin).Emu / EmuPerMm100;
+        long size = (long)Math.Round(textWidth.Emu / (double)EmuPerMm100);
+        if (size <= 0) return null;
+
+        long count = available / size;
+        if (count <= 1) return null;
+
+
+        return string.Concat(Enumerable.Repeat(text, (int)Math.Min(count, 32767)));
     }
 
     // -------------------------------------------------------------------------- output area
