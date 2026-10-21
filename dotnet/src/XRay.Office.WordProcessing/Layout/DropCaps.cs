@@ -230,7 +230,7 @@ public static class DropCaps
             Anchor = FrameAnchor.Paragraph,
             Wrap = TextWrap.Through,
             HorizontalOrigin = FrameHorizontalOrigin.Column,
-            HorizontalOffset = lineStart,
+            HorizontalOffset = LetterStart(host, lineStart, width, spanned, breakWidth),
             VerticalOrigin = FrameVerticalOrigin.Line,
             // `CalcFontSize` moves the letters by their ink's descent (`pDrop->SetY`, :991), so their ink
             // ends on the drop's baseline: nothing under the punctuation rule, which measured from the
@@ -253,6 +253,49 @@ public static class DropCaps
         };
 
         return host with { Frames = [letterFrame, roomFrame, .. host.Frames] };
+    }
+
+    /// <summary>
+    /// Where the letters stand across the first line: at its start, unless the line is centred or set
+    /// right, when they lead the first line's text — moved left as far as the drop's other lines reach.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Writer's first line holds the drop as a portion before its text, so a centred or right-set line
+    /// carries the drop along with its glue; <c>SwTextAdjuster::CalcDropAdjust</c>
+    /// (<c>sw/source/core/text/itradj.cxx</c>:805-879, called from <c>frmform.cxx</c>:2221-2226 only
+    /// for an alignment that is neither left nor block) then moves glue from before the drop to after the
+    /// text until the drop starts no further right than the furthest-left of lines 2 to <em>N</em>.
+    /// Measured on the 26.8 daily, a three-line <c>W</c> over 12 pt centred text: the letter at 81.35 pt
+    /// against the margin's 72.10, a two-line one — whose first line already starts left of its second, so
+    /// nothing moves — at 79.90, and set right at 90.65.
+    /// </para>
+    /// <para>
+    /// Only the letters move here. The first line's own text keeps the centring the paginator gives it
+    /// beside the drop, which is where Writer has it before the glue moves — 7.4 pt (centred) to 14.6 pt
+    /// (set right) right of where Writer draws it after; moving it would need the line's alignment
+    /// overridden from outside.
+    /// </para>
+    /// </remarks>
+    private static Length LetterStart(
+        PageParagraph host, Length lineStart, Length width, int spanned, Length breakWidth)
+    {
+        if (host.Format.IsRightToLeft) return lineStart;
+        if (host.Format.Alignment is not (TextAlignment.Centre or TextAlignment.End)) return lineStart;
+
+        // The first N lines all stand beside the drop, so their breaks are those of the paragraph laid
+        // out with the drop's width taken off every line.
+        PageParagraph beside = host with
+        {
+            Format = host.Format with { StartIndent = lineStart + width, FirstLineIndent = Length.Zero },
+        };
+        List<LineBox> rows = [.. LayOut(beside, breakWidth).Lines.Where(box => !box.SharesLineWithNext)];
+        if (rows.Count == 0) return lineStart;
+
+        Length left = rows[0].Left;
+        for (int i = 1; i < Math.Min(spanned, rows.Count); i++) left = Length.Min(left, rows[i].Left);
+
+        return Length.Max(lineStart, left - width);
     }
 
     /// <summary>
