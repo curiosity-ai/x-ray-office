@@ -19,3 +19,7 @@ Reference: `/opt/libreoffice26.8/program/soffice` 26.8.1.1, `FONTCONFIG_FILE=/tm
   DejaVuSansMono. This branch: the same except the eighth (DejaVuSans), because the ODT reader
   does not pass `style:font-family-generic` to the resolver at all (true of single names too;
   26.2.4.2 answers DejaVuSerif there as well). 26.2.4.2 answered DejaVuSans for A, D, G and I.
+- `cff.fodt`: Loma (name-keyed CFF), Inter, Unifont (CID-keyed), Inter Light. 26.8.1.1: all four
+  embedded Type 1 (converted). Before: three CFF faces named, not embedded (and Inter Light
+  missed, drawn in DejaVu Sans). After: Loma, Inter, Unifont embedded as CID Type 0C, poppler
+  draws the same glyphs as the reference; `pdftotext` unchanged.

@@ -202,6 +202,9 @@ public sealed partial class PdfFontEmbeddingTests
             // plain substring test collects the descriptors as well as the fonts.
             if (!body.Contains("/Type/Font/", StringComparison.Ordinal)) continue;
 
+            // A composite font's descriptor is on its descendant, which is listed on its own.
+            if (body.Contains("/Subtype/Type0", StringComparison.Ordinal)) continue;
+
             Match descriptor = DescriptorReference().Match(body);
             descriptor.Success.ShouldBeTrue($"a /Type/Font with no /FontDescriptor: {body}");
 

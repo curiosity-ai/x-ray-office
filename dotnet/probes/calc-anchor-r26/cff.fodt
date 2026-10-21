@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<office:document xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" office:version="1.3" office:mimetype="application/vnd.oasis.opendocument.text">
+<office:automatic-styles><style:style style:name="P0" style:family="paragraph"><style:text-properties fo:font-family="&apos;Loma&apos;" fo:font-size="14pt"/></style:style>
+<style:style style:name="P1" style:family="paragraph"><style:text-properties fo:font-family="&apos;Inter&apos;" fo:font-size="14pt"/></style:style>
+<style:style style:name="P2" style:family="paragraph"><style:text-properties fo:font-family="&apos;Unifont&apos;" fo:font-size="14pt"/></style:style>
+<style:style style:name="P3" style:family="paragraph"><style:text-properties fo:font-family="&apos;Inter Light&apos;" fo:font-size="14pt"/></style:style>
+</office:automatic-styles>
+<office:body><office:text><text:p text:style-name="P0">Loma Hamburgefonstiv quick brown fox 0123</text:p>
+<text:p text:style-name="P1">Inter Hamburgefonstiv quick brown fox 0123</text:p>
+<text:p text:style-name="P2">Unifont Hamburgefonstiv quick brown fox 0123</text:p>
+<text:p text:style-name="P3">InterLight Hamburgefonstiv quick brown fox 0123</text:p>
+</office:text></office:body></office:document>
