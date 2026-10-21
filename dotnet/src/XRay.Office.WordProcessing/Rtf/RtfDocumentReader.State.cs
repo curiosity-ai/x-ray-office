@@ -2083,6 +2083,7 @@ public sealed partial class RtfDocumentReader
             Flow finished = CurrentFlow;
             FinishParagraph(finished, state);
             CloseTablesDeeperThan(finished, 0);
+            EndFurnitureAfterTable(finished, state);
             _flows.RemoveAt(_flows.Count - 1);
 
             // Balances the paragraph FinishParagraph left open for text that never came.
@@ -2122,6 +2123,42 @@ public sealed partial class RtfDocumentReader
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Gives a header or footer that ends with a table the empty paragraph Writer puts after it, in the
+    /// default paragraph style and nothing else.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A Writer text cannot end with a table, so the importer's final paragraph follows it; on the 26.8 branch
+    /// that paragraph is imported as <em>Standard</em> with no direct formatting at all when the group closes
+    /// with nothing typed after the <c>\row</c> — the 26.8 daily's flat export of
+    /// <c>features/header-table.rtf</c> writes <c>&lt;text:p text:style-name="Standard"/&gt;</c> where 26.2.4.2
+    /// wrote a <c>P2</c> carrying the last cell's Carlito 9 pt. Measured on one-attribute variants of that
+    /// file: <c>\row\pard }</c>, <c>\row}</c>, <c>\row\pard\fs36 }</c>, <c>\row\pard\plain\fs36 }</c> and
+    /// <c>\row\pard\s20\fs36 }</c> all put the body's first baseline at 749.89 (26.2.4.2: 752.34, 741.69,
+    /// 742.99 and 741.69 for the stated sizes) — the header outgrowing its 0.31 in minimum by a 12 pt
+    /// Liberation Serif line over a 9 pt row. A <c>\par</c> after the row keeps the stated size in both
+    /// (<c>\fs36\par</c>: 741.69), and so does a trailing paragraph holding text, which are the
+    /// paragraphs the reader already records; a header without a table adds nothing in either.
+    /// </para>
+    /// <para>
+    /// Not extracted: the paragraph is empty, and the content tree has never held one for the case.
+    /// </para>
+    /// </remarks>
+    private void EndFurnitureAfterTable(Flow finished, GroupState state)
+    {
+        if (FurnitureList(finished) is not { Paragraphs.Count: 0, Blocks: [.., { Table: not null }] }) return;
+
+        GroupState standard = new() { Destination = state.Destination };
+        standard.ResetParagraph();
+        standard.ResetCharacter();
+        standard.FontIndex = _defaultFontIndex;
+        SelectParagraphStyle(standard, 0);
+
+        finished.InTable = false;
+        RecordLayoutParagraph(finished, standard, string.Empty);
     }
 
     /// <summary>
