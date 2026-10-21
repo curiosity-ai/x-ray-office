@@ -57,6 +57,9 @@ public sealed partial class DocxLayoutSource
     private readonly WordStyles _styles;
     private readonly SystemFontResolver _fonts;
     private readonly Length _defaultTabInterval;
+
+    /// <summary>Whether the document states <c>w:ulTrailSpace</c>; see <see cref="PageParagraph.DecoratesTrailingBlank"/>.</summary>
+    private readonly bool _underlinesTrailingSpace;
     private readonly int _compatibilityMode;
 
     /// <summary>What <c>w:beforeAutospacing</c> and <c>w:afterAutospacing</c> stand for here.</summary>
@@ -150,6 +153,7 @@ public sealed partial class DocxLayoutSource
         _compatibilityMode = CompatibilityMode(settings);
         WordCompatibility compatibility = WordCompatibility.Read(settings);
         _autoSpacing = AutoSpacing(settings, compatibility);
+        _underlinesTrailingSpace = compatibility.UnderlinesTrailingSpace;
         // `AsWordDocument` is the MS_WORD_COMP_GRID_METRICS compatibility flag, which the Word
         // filters set and ODF's does not. See MetricGrid.AsWordDocument.
         _metrics = (compatibility.UsesPrinterMetrics ? MetricGrid.Printer : MetricGrid.Reference)
@@ -1058,6 +1062,9 @@ public sealed partial class DocxLayoutSource
             // #i3952#: a tab or a run of spaces does not raise a line's height in a Word document, and a
             // DOCX imports with the setting on. See PageParagraph.BlanksAreTransparentToHeight.
             BlanksAreTransparentToHeight = true,
+
+            // `w:ulTrailSpace`. See PageParagraph.DecoratesTrailingBlank.
+            DecoratesTrailingBlank = _underlinesTrailingSpace,
 
             // A toggle in the schema, so `<w:suppressLineNumbers/>` and `w:val="1"` both mean on and
             // `w:val="0"` — which a style commonly writes to undo an inherited one — means off.

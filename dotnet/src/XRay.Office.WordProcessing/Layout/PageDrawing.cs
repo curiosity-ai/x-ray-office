@@ -1673,6 +1673,9 @@ public static class PageDrawing
         List<TabbedSegment> stretches =
             Stretches(paragraph, start, end, line.StartsParagraph, area.Width);
 
+        PageRun? lastRun = null;
+        Length lastPen = lineLeft;
+
         for (int index = 0; index < stretches.Count; index++)
         {
             TabbedSegment segment = stretches[index];
@@ -1766,6 +1769,27 @@ public static class PageDrawing
                 }
 
                 pen += extent;
+                lastRun = run;
+                lastPen = pen;
+            }
+        }
+
+        // The trailing blank, decorated like the text before it — see PageParagraph.DecoratesTrailingBlank.
+        if (rules is not null && paragraph.DecoratesTrailingBlank
+            && line.Box.Line.End > line.Box.Line.VisibleEnd
+            && lastRun is { IsDecorated: true } decorated && decorated.End >= end)
+        {
+            Length blank = TextShaper.Default.Shape(decorated.Face, " ", decorated.EffectiveShaping)
+                .Width(decorated.EmSize);
+            Length room = area.X + area.Width - paragraph.Format.EndIndent - lastPen;
+
+            // Writer measures that blank a little narrower than the face's own advance says (2.40 pt
+            // against 2.49 for Carlito at 11 pt on a probe), so a blank that just fits the line for it may
+            // overrun it here by a fraction of a point: clamped to the room rather than refused, which on
+            // that probe draws 2.43 pt where the reference draws 2.40.
+            if (blank > Length.Zero && room > Length.Zero)
+            {
+                Rules(decorated, lastPen, Length.Min(blank, room), baseline, rules, background);
             }
         }
 
