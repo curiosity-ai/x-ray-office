@@ -324,8 +324,11 @@ public sealed partial class RtfDocumentReader
         /// <summary>True when widow and orphan control applies.</summary>
         public bool HasWidowControl { get; set; }
 
-        /// <summary><c>\hyphpar0</c>: this paragraph is not hyphenated though the document is.</summary>
-        public bool SuppressesHyphenation { get; set; }
+        /// <summary>
+        /// <c>\hyphpar</c>, from the paragraph or its style: whether it is hyphenated, or null when neither says
+        /// and the document's <c>\hyphauto</c> decides.
+        /// </summary>
+        public bool? Hyphenates { get; set; }
 
         /// <summary>True when the paragraph starts a page.</summary>
         public bool StartsNewPage { get; set; }
@@ -388,7 +391,7 @@ public sealed partial class RtfDocumentReader
             KeepWithNext = KeepWithNext,
             KeepTogether = KeepTogether,
             HasWidowControl = HasWidowControl,
-            SuppressesHyphenation = SuppressesHyphenation,
+            Hyphenates = Hyphenates,
             StartsNewPage = StartsNewPage,
             HasContextualSpacing = HasContextualSpacing,
             // Deliberately not inherited: a nested group collects its own text, and the
@@ -444,7 +447,7 @@ public sealed partial class RtfDocumentReader
             KeepWithNext = false;
             KeepTogether = false;
             HasWidowControl = false;
-            SuppressesHyphenation = false;
+            Hyphenates = null;
             StartsNewPage = false;
             HasContextualSpacing = false;
         }
@@ -1450,9 +1453,17 @@ public sealed partial class RtfDocumentReader
                 // hyphenation-keep with keep-line, since RTF cannot state allowHyphenationAtTrackBottom —
                 // 26.8.1.1's flat export of rtf/lorem_ipsum.rtf shows `loext:hyphenation-zone="360"`,
                 // `fo:hyphenation-keep="page"` and `loext:hyphenation-keep-line="true"` on Standard.
-                Hyphenation = _autoHyphenation && !state.SuppressesHyphenation
-                    ? new HyphenationRules(
-                        Zone: Core.Units.Length.FromTwips(360), NoCaps: _noHyphenateCaps, KeepsLastLine: true)
+                //
+                // And a paragraph's or its style's `\hyphpar` decides over both: it is a
+                // suppressAutoHyphens, which DomainMapper maps to `ParaIsHyphenation = !value` whatever the
+                // document says, so `\hyphpar` alone hyphenates a document that never stated `\hyphauto`
+                // (`probes/rtf-hyphpar/`, 26.8's daily). The zone and the keep are set on Standard only
+                // when one of `\hyphauto`, `\hyphcaps0` or `\widowctrl` is (SettingsTable.cxx:751-752).
+                Hyphenation = state.Hyphenates ?? _autoHyphenation
+                    ? _autoHyphenation || _noHyphenateCaps || _widowControl
+                        ? new HyphenationRules(
+                            Zone: Core.Units.Length.FromTwips(360), NoCaps: _noHyphenateCaps, KeepsLastLine: true)
+                        : HyphenationRules.Default
                     : null,
             },
             FamilyOf(state),
@@ -2117,6 +2128,7 @@ public sealed partial class RtfDocumentReader
             Alignment = Said("ql", "qr", "qc", "qj", "qd", "qk") ? state.Alignment : null,
             SpaceBeforeTwips = Said("sb") ? state.SpaceBefore : null,
             KeepWithNext = Said("keepn") ? state.KeepWithNext : null,
+            Hyphenates = Said("hyphpar") ? state.Hyphenates : null,
         };
     }
 
@@ -2174,6 +2186,7 @@ public sealed partial class RtfDocumentReader
         if (f.SpaceBeforeTwips is { } before) state.SpaceBefore = before;
         if (f.SpaceAfterTwips is { } after) state.SpaceAfter = after;
         if (f.KeepWithNext is { } keep) state.KeepWithNext = keep;
+        if (f.Hyphenates is { } hyphenates) state.Hyphenates = hyphenates;
     }
 
     /// <summary>
@@ -2186,6 +2199,7 @@ public sealed partial class RtfDocumentReader
         if (f.SpaceBeforeTwips is not null) state.SpaceBefore = null;
         if (f.SpaceAfterTwips is not null) state.SpaceAfter = null;
         if (f.KeepWithNext is not null) state.KeepWithNext = false;
+        if (f.Hyphenates is not null) state.Hyphenates = null;
     }
 
     /// <summary>

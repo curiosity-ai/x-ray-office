@@ -169,6 +169,9 @@ public sealed partial class RtfDocumentReader
     /// <summary><c>\hyphcaps0</c>: a word in capitals is not hyphenated.</summary>
     private bool _noHyphenateCaps;
 
+    /// <summary><c>\widowctrl</c>, the document's widow control; see the hyphenation zone it brings.</summary>
+    private bool _widowControl;
+
     private int _colourRed;
     private int _colourGreen;
     private int _colourBlue;
@@ -834,7 +837,12 @@ public sealed partial class RtfDocumentReader
                 _noHyphenateCaps = token.Parameter == 0;
                 return;
             case "hyphpar":
-                state.SuppressesHyphenation = token.Parameter == 0;
+                state.Hyphenates = token.Parameter != 0;
+                return;
+            case "widowctrl":
+                // Read for the hyphenation zone alone: writerfilter's settings pass puts the zone and the
+                // keep on Standard when this, `\hyphauto` or `\hyphcaps0` is set.
+                _widowControl = (token.Parameter ?? 1) != 0;
                 return;
             case "widctlpar":
                 state.HasWidowControl = true;

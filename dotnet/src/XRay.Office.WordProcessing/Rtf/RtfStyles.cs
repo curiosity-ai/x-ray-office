@@ -133,6 +133,16 @@ public sealed record RtfStyleFormatting
     /// </remarks>
     public bool? KeepWithNext { get; init; }
 
+    /// <summary><c>\hyphpar</c>: whether a paragraph in the style is hyphenated.</summary>
+    /// <remarks>
+    /// Like <see cref="KeepWithNext"/>, stated for the style itself and still reaching the text:
+    /// <c>suppressAutoHyphens</c> has no entry in <c>getDefaultSPRM</c> (<c>rtfsprm.cxx</c>:154-230), so
+    /// nothing is written back over it. Measured on 26.8's daily: a style stating <c>\hyphpar0</c> stops a
+    /// <c>\hyphauto</c> document hyphenating its paragraphs and its children's, and a paragraph's own
+    /// <c>\hyphpar</c> turns it back on (<c>probes/rtf-hyphpar/</c>).
+    /// </remarks>
+    public bool? Hyphenates { get; init; }
+
     /// <summary>True when the entry stated nothing this type carries.</summary>
     public bool IsEmpty => this == Empty;
 
@@ -160,6 +170,7 @@ public sealed record RtfStyleFormatting
         SpaceBeforeTwips = SpaceBeforeTwips ?? parent.SpaceBeforeTwips,
         SpaceAfterTwips = SpaceAfterTwips ?? parent.SpaceAfterTwips,
         KeepWithNext = KeepWithNext ?? parent.KeepWithNext,
+        Hyphenates = Hyphenates ?? parent.Hyphenates,
     };
 }
 
@@ -741,6 +752,7 @@ public sealed class RtfStyles
             LanguageId = chain.LanguageId,
             WidthPerCent = chain.WidthPerCent,
             KeepWithNext = chain.KeepWithNext,
+            Hyphenates = chain.Hyphenates,
         };
 
         _resolvedContribution[id] = result;
