@@ -84,8 +84,10 @@ internal static class PptxTextBody
     /// <c>applyShapeReference</c> already brought over from the layout or master placeholder
     /// (<c>oox/source/ppt/pptshapecontext.cxx:183-186</c>), so the slide's own
     /// <c>&lt;a:bodyPr/&gt;</c> — which is what PowerPoint writes on a placeholder it has not
-    /// re-formatted — overrides nothing, and the anchor, the insets, the wrap and the autofit all
-    /// come from above.
+    /// re-formatted — overrides only what it states, and the anchor and the insets come from
+    /// above. <strong>The wrap and the autofit are the exception</strong>: the a:bodyPr context
+    /// writes both for every element it reads, stated or not, so they come from the nearest
+    /// a:bodyPr alone. See where <c>Wraps</c> and <c>AutoFit</c> are set below.
     /// </para>
     /// <para>
     /// It matters most for the anchor. <c>chapter_4_0.pptx</c> states <c>anchor="ctr"</c> once,
@@ -107,6 +109,11 @@ internal static class PptxTextBody
     /// shape with no <c>p:style</c> and wrong for the 1197 corpus slide shapes that have one.
     /// </para>
     /// </param>
+    /// <param name="presentationObject">
+    /// True for a placeholder LibreOffice imports as a presentation object rather than as a
+    /// custom shape, which wraps its text whatever <c>a:bodyPr/@wrap</c> says. See
+    /// <see cref="PptxTextStyles.IsPresentationTextObject"/>.
+    /// </param>
     public static SlideTextBody Read(
         XElement body,
         DrawingTheme? theme = null,
@@ -114,7 +121,8 @@ internal static class PptxTextBody
         Func<int, IReadOnlyList<XElement>>? inherited = null,
         SlideFields? fields = null,
         IReadOnlyList<XElement?>? inheritedBodyProperties = null,
-        DrawingCharacterStyle? shapeTextStyle = null)
+        DrawingCharacterStyle? shapeTextStyle = null,
+        bool presentationObject = false)
     {
         ArgumentNullException.ThrowIfNull(body);
 
@@ -150,27 +158,33 @@ internal static class PptxTextBody
                     markerFaces, inherited, fields, shapeTextStyle));
         }
 
-        // The autofit choice is taken whole from the nearest a:bodyPr that states one of the
-        // three: a slide's <a:bodyPr/> saying nothing is not the same as its saying a:noAutofit.
+        // The autofit choice is taken whole from the nearest a:bodyPr there is — the shape's own
+        // whenever its txBody has one — and from nothing further up, whether or not that element
+        // states one of the three.
         //
-        // `resizes` records *which* of the three that nearest one was, which @wrap needs and
-        // @fontScale does not — see Wraps below. Where one element states more than one, which is
-        // malformed, normAutofit wins over spAutoFit and both over noAutofit; the order of the
-        // tests is the precedence.
-        XElement? autofit = null;
-        bool resizes = false;
-        foreach (XElement source in bodyChain)
-        {
-            if (Drawing.Child(source, "normAutofit") is { } stated)
-            {
-                autofit = stated;
-                resizes = true;
-                break;
-            }
-
-            if (Drawing.Child(source, "spAutoFit") is not null) { resizes = true; break; }
-            if (Drawing.Child(source, "noAutofit") is not null) break;
-        }
+        // That is 26.x's rule, not PowerPoint's. A slide placeholder starts from a copy of its
+        // layout's text body (`applyShapeReference`, then `std::make_shared<TextBody>(…)` in
+        // `PPTShapeContext::onCreateContext`, `oox/source/ppt/pptshapecontext.cxx:183-188` at tag
+        // 26.8.1.1), and `TextBodyPropertiesContext`'s constructor then writes
+        // `TextFitToSize = NONE` and `TextAutoGrowHeight = false` into it for every a:bodyPr it
+        // reads (`oox/source/drawingml/textbodypropertiescontext.cxx:205-207`) before any
+        // a:normAutofit or a:spAutoFit child can set them back. So a slide's `<a:bodyPr/>`
+        // discards the a:normAutofit its layout or master states. Only a txBody with no a:bodyPr
+        // at all, which the schema does not allow, keeps the inherited choice — and then from
+        // the layout's own a:bodyPr, which reset the master's in the same way.
+        //
+        // Measured on autofit-inherit.pptx, whose layout body states a:normAutofit and whose
+        // slide states `<a:bodyPr/>` over overflowing 20 pt text: 26.2.4.2 and 26.8.1.1 both draw
+        // it at 20 pt (average glyph box 22.33 pt, the same as an explicit a:noAutofit), where
+        // the nearest-stating-element rule shrank it to about 15.6 pt. Master after 26.8
+        // (`52277daba816`) inherits as PowerPoint does; 26.8.1.1 does not.
+        //
+        // `resizes` records *which* of the three it was, which @wrap needs and @fontScale does
+        // not — see Wraps below. Where one element states more than one, which is malformed,
+        // normAutofit wins over spAutoFit; the order of the tests is the precedence.
+        XElement? autofit = properties is null ? null : Drawing.Child(properties, "normAutofit");
+        bool resizes = autofit is not null
+                       || (properties is not null && Drawing.Child(properties, "spAutoFit") is not null);
 
         (string? Preset, IReadOnlyList<FontworkAdjustment> Adjustments) warp = Warp(bodyChain);
 
@@ -195,7 +209,21 @@ internal static class PptxTextBody
             // overhangs 720 pt by 8.7 pt so that `Google Slides` extracts as `Google Slid`.
             // That two-character loss is the whole character difference on 15 of the 28
             // documents filed as `text`.
-            Wraps = Stated(bodyChain, "wrap") != "none" || resizes,
+            //
+            // And it is the nearest a:bodyPr's attribute alone, for the reason the autofit is:
+            // `TextBodyPropertiesContext` writes `TextWordWrap = (wrap == square)` with `square`
+            // as the default for every a:bodyPr it reads (`textbodypropertiescontext.cxx:64-65`
+            // at tag 26.8.1.1), so a slide's `<a:bodyPr/>` wraps whatever its layout says. And a
+            // presentation object wraps whatever its own a:bodyPr says, because word wrap is a
+            // custom-shape property — see PptxTextStyles.IsPresentationTextObject. Measured on
+            // wrap-inherit.pptx: 9 lines in 26.2.4.2 and 26.8.1.1 for a body placeholder whose
+            // layout states wrap="none" with `<a:bodyPr/>`, `wrap="none"` or `wrap="square"` on
+            // the slide, where reading the attribute down the chain drew 3. A text box with
+            // wrap="none" still draws one line.
+            Wraps = presentationObject
+                    || properties is null
+                    || Drawing.Attribute(properties, "wrap") != "none"
+                    || resizes,
             AutoFit = autofit is not null,
             FontScale = Thousandth(autofit, "fontScale", 1.0),
             WarpPreset = warp.Preset,

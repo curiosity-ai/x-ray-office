@@ -52,22 +52,11 @@ public class SlideWrapAutofitTests
         PptxTextBody.Read(Body(wrap, autofit)).Wraps.ShouldBe(wraps);
     }
 
-    /// <summary>
-    /// A fitting autofit inherited from a layout or master beats a slide's own
-    /// <c>wrap="none"</c>, because the chain is what resolves — not the nearest element.
-    /// </summary>
-    /// <remarks>
-    /// This is the case a same-element census cannot see, and it is the common shape in the
-    /// corpus: PowerPoint writes the wrap where the box is drawn and the autofit where the
-    /// placeholder is defined.
-    /// </remarks>
-    [Fact]
-    public void AnInheritedFittingAutofitBeatsTheBodysOwnWrapNone()
-    {
-        PptxTextBody.Read(
-            Body("none", null),
-            inheritedBodyProperties: [Properties(null, "spAutoFit")]).Wraps.ShouldBeTrue();
-    }
+    // A fitting autofit inherited from a layout or master used to be asserted here to beat a
+    // body's own wrap="none". It does not in 26.2.4.2 or 26.8.1.1: the body's own a:bodyPr resets
+    // the autofit before its children are read, so only its own a:spAutoFit counts. A placeholder
+    // that would show the difference is usually a presentation object, which wraps anyway. See
+    // SlidePlaceholderBodyPropertiesTests.
 
     /// <summary>
     /// An inherited <c>noAutofit</c> leaves <c>wrap="none"</c> standing, which is the other half
