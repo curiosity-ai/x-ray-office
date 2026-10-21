@@ -1749,7 +1749,7 @@ public static class PageDrawing
 
                 if (highlights is not null && run.IsHighlighted)
                 {
-                    highlights.Add((Band(paragraph, run, pen, extent, baseline), run.Highlight));
+                    highlights.Add((Band(paragraph, run, pen, extent, baseline, line.StartsParagraph), run.Highlight));
                 }
 
                 if (rules is not null && run.IsDecorated)
@@ -1760,7 +1760,7 @@ public static class PageDrawing
                 // The clickable area of a link is the band the run's own face and size give it, the same
                 // rectangle a highlight would take, so the pointer changes where the text is.
                 if (links is not null && run.Link is { Length: > 0 } link
-                    && Band(paragraph, run, pen, extent, baseline) is { IsEmpty: false } clickable)
+                    && Band(paragraph, run, pen, extent, baseline, line.StartsParagraph) is { IsEmpty: false } clickable)
                 {
                     links.Add((clickable, link));
                 }
@@ -1807,7 +1807,7 @@ public static class PageDrawing
     /// </para>
     /// </remarks>
     private static DocRect Band(
-        PageParagraph paragraph, PageRun run, Length pen, Length extent, Length baseline)
+        PageParagraph paragraph, PageRun run, Length pen, Length extent, Length baseline, bool startsParagraph)
     {
         LineMetrics metrics = LineSpacing.Resolve(
             run.Face, paragraph.Metrics, WriterLineBox.LeadingAboveText);
@@ -1816,6 +1816,36 @@ public static class PageDrawing
         Length ascent = metrics.ScaledAscent(size);
         Length height = metrics.ScaledLineHeight(size);
         if (height <= Length.Zero) return default;
+
+        // Proportional spacing below single shrinks the band with the line, so that it does not reach
+        // into the line above: `SwTextPaintInfo::CalcRect` scales the portion's height and its ascent by
+        // the percentage (`sw/source/core/text/inftxt.cxx`:846-852 and :903-909 in the tree here). In
+        // 26.8.1.1 that is for `LineSpaceRule::Auto` with `InterLineSpaceRule::Prop` and nothing else:
+        // tdf#170635 (backport f4cf1b61bd36) removed the arm that did the same for a fixed leading, which
+        // the tree still carries and this never had.
+        // Measured on an authored highlight at `w:line="180" w:lineRule="auto"`: 26.8.1.1 draws the band
+        // 9.95 pt tall with its top 7.85 pt above the baseline, against 13.45 and 10.47 here before.
+        //
+        // On a line after the paragraph's first the portion has already been shrunk once, to the line's
+        // own reduced height with four fifths of it above the baseline — the fixed-height arithmetic
+        // `SwTextFormatter::CalcRealHeight` borrows (`itrform2.cxx`:2366-2393) — so the band is the
+        // percentage of that. Measured at 75 % in both a DOCX and a flat ODT: 9.95 pt with 7.85 above the
+        // baseline on the first line and 7.55 pt with 6.00 above it on every later one.
+        if (paragraph.Format.LineSpacing is { Mode: LineSpacingMode.Proportional } spacing
+            && (int)Math.Round(spacing.Proportion * 100) is var percent and < 100)
+        {
+            if (startsParagraph)
+            {
+                height = height * percent / 100;
+                ascent = ascent * percent / 100;
+            }
+            else
+            {
+                Length line = height * percent / 100;
+                height = line * percent / 100;
+                ascent = line * 4 / 5 * percent / 100;
+            }
+        }
 
         // The rise moves the band with the text: a highlighted superscript is banded where it is drawn.
         return new DocRect(pen, baseline - run.Rise - ascent, extent, height);
