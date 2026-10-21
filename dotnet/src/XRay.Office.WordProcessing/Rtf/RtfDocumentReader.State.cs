@@ -324,6 +324,9 @@ public sealed partial class RtfDocumentReader
         /// <summary>True when widow and orphan control applies.</summary>
         public bool HasWidowControl { get; set; }
 
+        /// <summary><c>\hyphpar0</c>: this paragraph is not hyphenated though the document is.</summary>
+        public bool SuppressesHyphenation { get; set; }
+
         /// <summary>True when the paragraph starts a page.</summary>
         public bool StartsNewPage { get; set; }
 
@@ -385,6 +388,7 @@ public sealed partial class RtfDocumentReader
             KeepWithNext = KeepWithNext,
             KeepTogether = KeepTogether,
             HasWidowControl = HasWidowControl,
+            SuppressesHyphenation = SuppressesHyphenation,
             StartsNewPage = StartsNewPage,
             HasContextualSpacing = HasContextualSpacing,
             // Deliberately not inherited: a nested group collects its own text, and the
@@ -440,6 +444,7 @@ public sealed partial class RtfDocumentReader
             KeepWithNext = false;
             KeepTogether = false;
             HasWidowControl = false;
+            SuppressesHyphenation = false;
             StartsNewPage = false;
             HasContextualSpacing = false;
         }
@@ -1435,6 +1440,20 @@ public sealed partial class RtfDocumentReader
 
                 // And, by the same route, TabOverSpacing — WriterFilter.cxx:325.
                 TabsOverSpacing = true,
+
+                // `\hyphauto` is a document setting that dmapper turns into ParaIsHyphenation on the
+                // default paragraph style (SettingsTable.cxx:750-760), so every paragraph inherits it
+                // unless its own `\hyphpar0` — suppressAutoHyphens — takes it away.
+                //
+                // With it come the two things writerfilter puts beside it on that style whatever the file
+                // says (SettingsTable.cxx:103, 766-785): Word's quarter-inch hyphenation zone, and
+                // hyphenation-keep with keep-line, since RTF cannot state allowHyphenationAtTrackBottom —
+                // 26.8.1.1's flat export of rtf/lorem_ipsum.rtf shows `loext:hyphenation-zone="360"`,
+                // `fo:hyphenation-keep="page"` and `loext:hyphenation-keep-line="true"` on Standard.
+                Hyphenation = _autoHyphenation && !state.SuppressesHyphenation
+                    ? new HyphenationRules(
+                        Zone: Core.Units.Length.FromTwips(360), NoCaps: _noHyphenateCaps, KeepsLastLine: true)
+                    : null,
             },
             FamilyOf(state),
             SizeOf(state),

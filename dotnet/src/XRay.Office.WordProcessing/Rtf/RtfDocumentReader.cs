@@ -163,6 +163,12 @@ public sealed partial class RtfDocumentReader
     /// </remarks>
     private int _defaultFontIndex;
 
+    /// <summary><c>\hyphauto</c>: every paragraph is hyphenated unless it says otherwise.</summary>
+    private bool _autoHyphenation;
+
+    /// <summary><c>\hyphcaps0</c>: a word in capitals is not hyphenated.</summary>
+    private bool _noHyphenateCaps;
+
     private int _colourRed;
     private int _colourGreen;
     private int _colourBlue;
@@ -816,6 +822,19 @@ public sealed partial class RtfDocumentReader
                 return;
             case "keep":
                 state.KeepTogether = token.Parameter is not 0;
+                return;
+            // Automatic hyphenation. `\hyphauto` and `\hyphcaps` are document settings
+            // (`rtfdocumentimpl.cxx`:2255-2261: autoHyphenation, and doNotHyphenateCaps for `\hyphcaps0`);
+            // `\hyphpar0` is a paragraph's suppressAutoHyphens (`:2262-2265`). `\hyphhotz` and
+            // `\hyphconsec` are tokenised and then dropped by writerfilter, so they are not read here either.
+            case "hyphauto":
+                _autoHyphenation = (token.Parameter ?? 1) != 0;
+                return;
+            case "hyphcaps":
+                _noHyphenateCaps = token.Parameter == 0;
+                return;
+            case "hyphpar":
+                state.SuppressesHyphenation = token.Parameter == 0;
                 return;
             case "widctlpar":
                 state.HasWidowControl = true;

@@ -205,7 +205,49 @@ internal static class OdfParagraphFormats
             // Also document-wide, and the one flag every Word-family reader in this tree already sets
             // by hand: an ODF document states it outright, so it is read rather than assumed.
             TabsRelativeToIndent = tabsRelativeToIndent,
+
+            Hyphenation = Hyphenation(styles, styleName),
         };
+    }
+
+    /// <summary>
+    /// The paragraph's automatic hyphenation, or null when <c>fo:hyphenate</c> is not on for it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// ODF writes the item across both property sets — <c>fo:hyphenate</c>, the two character counts, the
+    /// word length, no-caps and the zone on <c>style:text-properties</c>, the ladder count and the keep trio
+    /// on <c>style:paragraph-properties</c> (<c>xmloff/source/text/txtprmap.cxx</c>:340-360) — and Writer
+    /// holds it as one paragraph attribute, so both are resolved through the paragraph's own style chain.
+    /// Unstated counts take a new document's defaults, as <see cref="HyphenationRules.Default"/> says.
+    /// <c>loext:hyphenation-zone</c> is a bare number of twips, or <c>no-limit</c> for none.
+    /// </para>
+    /// <para>
+    /// Hyphenation-keep needs <c>fo:hyphenation-keep="page"</c> and <c>loext:hyphenation-keep-line="true"</c>;
+    /// keep without keep-line moves the whole line, which is not modelled, so it keeps nothing.
+    /// </para>
+    /// </remarks>
+    private static HyphenationRules? Hyphenation(OdfStyles styles, string? styleName)
+    {
+        if (Text(styles, styleName, OdfNamespaces.FoCompatible, "hyphenate").AsBoolean() != true) return null;
+
+        HyphenationRules defaults = HyphenationRules.Default;
+        int Count(string ns, string name, int fallback)
+            => Text(styles, styleName, ns, name).AsInt() is { } stated and >= 0 ? stated : fallback;
+
+        int ladder = Paragraph(styles, styleName, OdfNamespaces.FoCompatible, "hyphenation-ladder-count")
+            .AsInt() is { } limit and > 0 ? limit : 0;
+        bool keep = Paragraph(styles, styleName, OdfNamespaces.FoCompatible, "hyphenation-keep").Is("page")
+                    && Paragraph(styles, styleName, OdfNamespaces.LoExt, "hyphenation-keep-line").AsBoolean() == true;
+
+        return new HyphenationRules(
+            MinLeading: Count(OdfNamespaces.FoCompatible, "hyphenation-remain-char-count", defaults.MinLeading),
+            MinTrailing: Count(OdfNamespaces.FoCompatible, "hyphenation-push-char-count", defaults.MinTrailing),
+            MinWordLength: Count(OdfNamespaces.LoExt, "hyphenation-word-char-count", defaults.MinWordLength),
+            Zone: Length.FromTwips(Count(OdfNamespaces.LoExt, "hyphenation-zone", 0)),
+            NoCaps: Text(styles, styleName, OdfNamespaces.LoExt, "hyphenation-no-caps").AsBoolean() == true,
+            MaxConsecutive: ladder,
+            KeepsLastLine: keep);
     }
 
     /// <summary>
