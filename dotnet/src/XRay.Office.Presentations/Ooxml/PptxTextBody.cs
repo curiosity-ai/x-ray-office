@@ -139,11 +139,9 @@ internal static class PptxTextBody
         XElement? properties = bodyChain.Count > 0 ? bodyChain[0] : null;
         XElement? listStyle = Drawing.Child(body, "lstStyle");
 
-        // One counter and one "is this level numbering" flag per outline level, carried across
-        // the whole body: a:buAutoNum numbers a *run* of paragraphs, and the run is broken by a
-        // paragraph that draws a different kind of marker or none at all.
-        int[] counters = new int[9];
-        bool[] counting = new bool[9];
+        // The numbering state, carried across the whole body: a:buAutoNum numbers a *run* of
+        // paragraphs, and what breaks or restarts the run is DrawingListNumbering's.
+        DrawingListNumbering numbering = new();
 
         // And one bullet face per level, for the same reason and by the same mechanism: the
         // shape's numbering rule outlives the paragraph that wrote to it. See `Marker`.
@@ -154,7 +152,7 @@ internal static class PptxTextBody
         {
             paragraphs.Add(
                 Paragraph(
-                    paragraph, listStyle, theme, defaultTypeface, counters, counting,
+                    paragraph, listStyle, theme, defaultTypeface, numbering,
                     markerFaces, inherited, fields, shapeTextStyle));
         }
 
@@ -446,8 +444,7 @@ internal static class PptxTextBody
         XElement? listStyle,
         DrawingTheme? theme,
         string? defaultTypeface,
-        int[] counters,
-        bool[] counting,
+        DrawingListNumbering numbering,
         string?[] markerFaces,
         Func<int, IReadOnlyList<XElement>>? inherited,
         SlideFields? fields,
@@ -547,7 +544,10 @@ internal static class PptxTextBody
             Length.FromEmu(Emu(chain, "marL")),
             Length.FromEmu(Emu(chain, "indent")),
             Language(Drawing.Child(paragraph, "r")),
-            Marker(chain, theme, level, counters, counting, markerFaces, text.Length > 0))
+            Marker(
+                chain, theme, level, numbering,
+                DrawingListNumbering.OwnBullet(chain.Take(withinBody)), markerFaces,
+                text.Length > 0))
         {
             // a:defTabSz, whose absence means DrawingML's own default of one inch and not a word
             // processor's half inch. Nearly every master states it explicitly as 914400, which is
@@ -599,7 +599,7 @@ internal static class PptxTextBody
     /// which are not installed on the machines this runs on.
     /// </para>
     /// <para>
-    /// <c>a:buAutoNum</c> is numbered by the counters the caller carries across the body, which
+    /// <c>a:buAutoNum</c> is numbered by the <see cref="DrawingListNumbering"/> the caller carries across the body, which
     /// is the same walk and the same arrays extraction uses — <see cref="DrawingTextBody"/> owns
     /// the arithmetic so that a nested list cannot be numbered two different ways by the two
     /// readers. <strong>An empty paragraph draws no marker and consumes no number:</strong> the
@@ -633,12 +633,12 @@ internal static class PptxTextBody
         List<XElement> chain,
         DrawingTheme? theme,
         int level,
-        int[] counters,
-        bool[] counting,
+        DrawingListNumbering numbering,
+        XElement? ownBullet,
         string?[] markerFaces,
         bool hasText)
     {
-        int slot = Math.Clamp(level, 0, counters.Length - 1);
+        int slot = Math.Clamp(level, 0, markerFaces.Length - 1);
 
         // Before any of the branches below, and whether or not this paragraph draws anything:
         // stating a face writes it into the level's rule, and a `buNone` paragraph states it just
@@ -653,22 +653,20 @@ internal static class PptxTextBody
         {
             if (Drawing.Child(source, "buNone") is not null)
             {
-                counting[slot] = false;
+                numbering.Next(slot, ownBullet, null, hasText);
                 return null;
             }
 
             if (Drawing.Child(source, "buAutoNum") is { } number)
             {
-                if (!hasText) return null;
-
-                return Marked(
-                    DrawingTextBody.AutoNumber(number, slot, counters, counting),
-                    chain, theme, markerFaces[slot], isSymbol: false);
+                return numbering.Next(slot, ownBullet, number, hasText) is { } label
+                    ? Marked(label, chain, theme, markerFaces[slot], isSymbol: false)
+                    : null;
             }
 
             if (Drawing.Child(source, "buChar") is not { } bullet) continue;
 
-            counting[slot] = false;
+            numbering.Next(slot, ownBullet, null, hasText);
             if (!hasText) return null;
 
             string? character = Drawing.Attribute(bullet, "char");
@@ -682,7 +680,7 @@ internal static class PptxTextBody
             return Marked(FirstCodePoint(character), chain, theme, markerFaces[slot]);
         }
 
-        counting[slot] = false;
+        numbering.Next(slot, ownBullet, null, hasText);
         return null;
     }
 

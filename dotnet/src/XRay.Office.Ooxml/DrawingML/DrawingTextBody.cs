@@ -106,14 +106,12 @@ public static class DrawingTextBody
 
         XElement? listStyle = Drawing.Child(textBody, "lstStyle");
 
-        // One counter per outline level, live for the length of this body. DrawingML has no
-        // element that restarts numbering; a new body is the restart, which is why the state
-        // is local to this call rather than held by the caller.
-        int[] counters = new int[9];
-        bool[] counting = new bool[9];
+        // The numbering state is live for the length of this body: a new body is a new list,
+        // which is why it is local to this call rather than held by the caller.
+        DrawingListNumbering numbering = new();
 
         foreach (XElement paragraph in Drawing.Children(textBody, "p"))
-            target.Children.Add(ReadParagraph(paragraph, listStyle, options, counters, counting));
+            target.Children.Add(ReadParagraph(paragraph, listStyle, options, numbering));
     }
 
     /// <summary>
@@ -175,8 +173,7 @@ public static class DrawingTextBody
         XElement paragraph,
         XElement? bodyListStyle,
         DrawingTextOptions options,
-        int[] counters,
-        bool[] counting)
+        DrawingListNumbering numbering)
     {
         XElement? properties = Drawing.Child(paragraph, "pPr");
 
@@ -193,7 +190,9 @@ public static class DrawingTextBody
         // shape tree.
         List<XElement> chain = [.. LevelChain(properties, bodyListStyle, level, options)];
 
-        string? marker = ResolveMarker(chain, level, counters, counting, hasText);
+        XElement? ownBullet = DrawingListNumbering.OwnBullet(
+            [properties, LevelProperties(bodyListStyle, level)]);
+        string? marker = ResolveMarker(chain, level, ownBullet, numbering, hasText);
 
         // Every <c>a:defRPr</c> the chain offers, most specific first. A run states only what
         // differs from these, and on a PowerPoint-authored deck it commonly states nothing.
@@ -404,19 +403,23 @@ public static class DrawingTextBody
     /// a body style that bullets.
     /// </remarks>
     private static string? ResolveMarker(
-        IEnumerable<XElement> chain, int level, int[] counters, bool[] counting, bool hasText)
+        IEnumerable<XElement> chain,
+        int level,
+        XElement? ownBullet,
+        DrawingListNumbering numbering,
+        bool hasText)
     {
         foreach (XElement source in chain)
         {
             if (Drawing.Child(source, "buNone") is not null)
             {
-                counting[level] = false;
+                numbering.Next(level, ownBullet, null, hasText);
                 return null;
             }
 
             if (Drawing.Child(source, "buChar") is { } character)
             {
-                counting[level] = false;
+                numbering.Next(level, ownBullet, null, hasText);
                 if (!hasText) return null;
 
                 string? bullet = Drawing.Attribute(character, "char");
@@ -424,28 +427,25 @@ public static class DrawingTextBody
             }
 
             if (Drawing.Child(source, "buAutoNum") is { } autoNumber)
-            {
-                // An empty item does not consume a number either, so the counter is left alone
-                // rather than advanced and hidden — otherwise a blank line between two items
-                // makes the second jump from 2 to 4.
-                return hasText ? AutoNumber(autoNumber, level, counters, counting) : null;
-            }
+                return numbering.Next(level, ownBullet, autoNumber, hasText);
         }
 
         // Nothing in the chain said anything. The schema's default is no bullet, which is what
         // a plain text box gets and is why one does not come out bulleted.
-        counting[level] = false;
+        numbering.Next(level, ownBullet, null, hasText);
         return null;
     }
 
     /// <summary>
-    /// The next number in an <c>a:buAutoNum</c> run, advancing the counters.
+    /// The next number in a run of automatic numbering, advancing the counters — the binary
+    /// PowerPoint reader's arithmetic.
     /// </summary>
     /// <remarks>
-    /// Public because rendering needs the same answer from a second walk over the same tree, and
-    /// two implementations of "what number is this item" would drift the moment one of them met a
-    /// nested list. The caller owns the two arrays — one per outline level, nine of each — so the
-    /// state belongs to the text body being read rather than to this type.
+    /// A DrawingML body goes through <see cref="DrawingListNumbering"/> instead, which models
+    /// where the OOXML importer restarts a list. A <c>.ppt</c> is imported by
+    /// <c>svdfppt</c>, which has no such state, so its reader keeps this simpler rule: the run
+    /// continues until the caller breaks it, and a nested level restarts whenever its parent
+    /// advances. The caller owns the two arrays — one per outline level, nine of each.
     /// </remarks>
     /// <param name="autoNumber">The <c>a:buAutoNum</c> element.</param>
     /// <param name="level">The paragraph's zero-based outline level.</param>
@@ -473,7 +473,7 @@ public static class DrawingTextBody
         // level stops counting the moment this one produces a number.
         for (int deeper = level + 1; deeper < counting.Length; deeper++) counting[deeper] = false;
 
-        return Format(Drawing.Attribute(autoNumber, "type"), counters[level]);
+        return FormatNumber(Drawing.Attribute(autoNumber, "type"), counters[level]);
     }
 
     /// <summary>
@@ -488,7 +488,7 @@ public static class DrawingTextBody
     /// (<c>oox/source/drawingml/textparagraphproperties.cxx:150-160</c>) — from each needing a
     /// case of their own; an alphabet this does not know still gets its punctuation right.
     /// </remarks>
-    private static string Format(string? scheme, int value)
+    internal static string FormatNumber(string? scheme, int value)
     {
         scheme ??= string.Empty;
 
