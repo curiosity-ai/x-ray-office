@@ -370,6 +370,12 @@ public sealed partial class DocxLayoutSource
         List<PageBlock> blocks = [];
         Walk(body, blocks, depth: 0);
         SuppressAutoSpacingInLists(blocks);
+
+        // The first-section arm of the rule `SuppressAutoSpacingInShape` ports: the document's first
+        // paragraph takes no HTML auto margin either (`DomainMapper_Impl.cxx`:2461). Measured on an
+        // authored two-paragraph probe, both stating `w:beforeAutospacing="1"`: 26.8.1.1 sets the first
+        // at the top margin, 72.03 pt, and the second 14 pt below its predecessor.
+        SuppressAutoSpacingInShape(blocks);
         ParagraphBorderJoin.Apply(blocks);
         return blocks;
     }
@@ -459,11 +465,8 @@ public sealed partial class DocxLayoutSource
     /// reads the paragraph's numbering rules and leaves the margin alone when it has any.
     /// </para>
     /// <para>
-    /// <b>Not done:</b> the same <c>if</c> in <c>finishParagraph</c> also zeroes the top margin of the
-    /// first paragraph of a <em>shape</em> and of the first paragraph of the document's first section.
-    /// Both are the same rule and both are unimplemented here, because neither was measured — a cell is
-    /// where the corpus showed it, and the other two move the body flow, which is not free to change on
-    /// an argument from symmetry alone.
+    /// The same <c>if</c> in <c>finishParagraph</c> also zeroes the top margin of the first paragraph of
+    /// a <em>shape</em> and of the document's first paragraph, which is <see cref="SuppressAutoSpacingInShape"/>.
     /// </para>
     /// </remarks>
     private void SuppressAutoSpacingInCell(List<PageBlock> blocks)
@@ -483,6 +486,33 @@ public sealed partial class DocxLayoutSource
                 _styles, Word.Child(last.Source as XElement, "pPr"), _tableStyle, before: false))
         {
             blocks[^1] = last with { Format = last.Format with { SpaceAfter = Length.Zero } };
+        }
+    }
+
+    /// <summary>
+    /// Drops the HTML auto margin above a shape's first paragraph, and above the document's.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The shape arm of the same <c>if</c> in <c>DomainMapper_Impl::finishParagraph</c> that
+    /// <see cref="SuppressAutoSpacingInCell"/> ports for a cell — <c>GetIsFirstParagraphInShape()</c>
+    /// (<c>sw/source/writerfilter/dmapper/DomainMapper_Impl.cxx</c>:2458-2470) — so a text box's text
+    /// starts at its inset rather than fourteen points below it. A stated <c>w:before</c> survives, as in
+    /// a cell.
+    /// </para>
+    /// <para>
+    /// Measured on <c>textbox.docx</c>, whose 27 boxes' paragraphs state <c>w:beforeAutospacing="1"</c>:
+    /// 26.8.1.1's own flat export gives the first paragraph of each box <c>fo:margin-top="0in"</c>, and
+    /// without it this tree pushed the text of the smaller boxes out of their bottoms.
+    /// </para>
+    /// </remarks>
+    private void SuppressAutoSpacingInShape(List<PageBlock> blocks)
+    {
+        if (blocks.Count > 0 && blocks[0] is PageParagraph first
+            && WordParagraphFormats.IsAutoSpaced(
+                _styles, Word.Child(first.Source as XElement, "pPr"), _tableStyle, before: true))
+        {
+            blocks[0] = first with { Format = first.Format with { SpaceBefore = Length.Zero } };
         }
     }
 
@@ -1713,7 +1743,9 @@ public sealed partial class DocxLayoutSource
             _frameDepth++;
             try
             {
-                return ReadFlow(box);
+                List<PageBlock> blocks = ReadFlow(box);
+                SuppressAutoSpacingInShape(blocks);
+                return blocks;
             }
             finally
             {
