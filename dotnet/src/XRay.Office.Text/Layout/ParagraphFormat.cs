@@ -83,7 +83,12 @@ public enum LineSpacingMode
 /// spacing at all (tdf#88752, tdf#167583, the early return at <c>itrform2.cxx</c>:2279-2284), while the
 /// East Asian height stays off because the paragraph still snaps.
 /// </param>
-public readonly record struct TextGridSnap(Length Pitch, bool Snaps = true);
+/// <param name="Characters">
+/// The grid's character half, or null for a grid of lines only. It reaches a cell's paragraph too, whatever
+/// <paramref name="Snaps"/> says: the font cache asks <c>SnapToGrid</c>, which is the paragraph's own flag
+/// and the page's grid, and not the table's line-height setting. See <see cref="CharacterGrid"/>.
+/// </param>
+public readonly record struct TextGridSnap(Length Pitch, bool Snaps = true, CharacterGrid? Characters = null);
 
 /// <summary>
 /// How far apart a paragraph's baselines sit.

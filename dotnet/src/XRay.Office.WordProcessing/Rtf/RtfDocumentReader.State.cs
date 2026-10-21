@@ -227,6 +227,9 @@ public sealed partial class RtfDocumentReader
         /// <summary>The deletion's date.</summary>
         public uint DeletionDate { get; set; }
         public int VerticalPosition { get; set; }
+
+        /// <summary><c>\up</c> or <c>\dn</c>: a half-point offset off the baseline, positive up; 0 for none.</summary>
+        public int PositionHalfPoints { get; set; }
         public int FontIndex { get; set; }
         public int LanguageId { get; set; }
         public int CharacterStyleId { get; set; }
@@ -324,14 +327,43 @@ public sealed partial class RtfDocumentReader
         /// <summary>True when widow and orphan control applies.</summary>
         public bool HasWidowControl { get; set; }
 
-        /// <summary><c>\hyphpar0</c>: this paragraph is not hyphenated though the document is.</summary>
-        public bool SuppressesHyphenation { get; set; }
+        /// <summary>
+        /// <c>\hyphpar</c>, from the paragraph or its style: whether it is hyphenated, or null when neither says
+        /// and the document's <c>\hyphauto</c> decides.
+        /// </summary>
+        public bool? Hyphenates { get; set; }
 
         /// <summary>True when the paragraph starts a page.</summary>
         public bool StartsNewPage { get; set; }
 
         /// <summary>True when spacing between paragraphs of one style is suppressed.</summary>
         public bool HasContextualSpacing { get; set; }
+
+        /// <summary>
+        /// The paragraph-frame words so far: part of the group state as <c>RTFParserState::m_aFrame</c> is,
+        /// copied into a nested group and cleared by <c>\pard</c> (<c>rtfdispatchflag.cxx</c>:600).
+        /// </summary>
+        public RtfParagraphFrame Frame { get; set; }
+
+        /// <summary>
+        /// The paragraph's border words so far, side by side: part of the paragraph sprms in writerfilter, so
+        /// copied into a nested group and cleared by <c>\pard</c>.
+        /// </summary>
+        public RtfBorderDrafts ParagraphBorders { get; set; }
+
+        /// <summary>
+        /// Which paragraph side the describing words (<c>\brdrw</c>, <c>\brdrcf</c>, <c>\brsp</c>, the style
+        /// words) now apply to, or null when another scope — a cell, the page, a run — holds them.
+        /// </summary>
+        /// <remarks>
+        /// <c>RTFParserState::m_nBorderState</c>, which <em>is</em> group state and which <c>\pard</c> does not
+        /// reset (<c>rtfdocumentimpl.hxx</c>:540; only the five selectors in <c>rtfdispatchflag.cxx</c>:643-801
+        /// ever set it). <see cref="RtfBorderDrafts.Box"/> is <c>\box</c>, which describes all four sides at once.
+        /// </remarks>
+        public int? ParagraphBorderSide { get; set; }
+
+        /// <summary><c>\cbpat</c>: the paragraph's background, as a colour-table index, or null for none.</summary>
+        public int? ShadingColourIndex { get; set; }
 
         public GroupState Clone() => new()
         {
@@ -358,6 +390,7 @@ public sealed partial class RtfDocumentReader
             DeletionAuthor = DeletionAuthor,
             DeletionDate = DeletionDate,
             VerticalPosition = VerticalPosition,
+            PositionHalfPoints = PositionHalfPoints,
             FontIndex = FontIndex,
             LanguageId = LanguageId,
             CharacterStyleId = CharacterStyleId,
@@ -388,9 +421,13 @@ public sealed partial class RtfDocumentReader
             KeepWithNext = KeepWithNext,
             KeepTogether = KeepTogether,
             HasWidowControl = HasWidowControl,
-            SuppressesHyphenation = SuppressesHyphenation,
+            Hyphenates = Hyphenates,
             StartsNewPage = StartsNewPage,
             HasContextualSpacing = HasContextualSpacing,
+            Frame = Frame,
+            ParagraphBorders = ParagraphBorders,
+            ParagraphBorderSide = ParagraphBorderSide,
+            ShadingColourIndex = ShadingColourIndex,
             // Deliberately not inherited: a nested group collects its own text, and the
             // stylesheet and font-table bookkeeping belongs to the entry that declared it.
         };
@@ -414,6 +451,7 @@ public sealed partial class RtfDocumentReader
             WidthPerCent = 100;
             Revised = false;
             VerticalPosition = 0;
+            PositionHalfPoints = 0;
             CharacterStyleId = 0;
         }
 
@@ -444,9 +482,15 @@ public sealed partial class RtfDocumentReader
             KeepWithNext = false;
             KeepTogether = false;
             HasWidowControl = false;
-            SuppressesHyphenation = false;
+            Hyphenates = null;
             StartsNewPage = false;
             HasContextualSpacing = false;
+            Frame = default;
+
+            // The borders and the shading are paragraph sprms, which \pard replaces; the border *selection*
+            // is not, and stays where it was (see ParagraphBorderSide).
+            ParagraphBorders = default;
+            ShadingColourIndex = null;
         }
     }
 
@@ -1450,9 +1494,17 @@ public sealed partial class RtfDocumentReader
                 // hyphenation-keep with keep-line, since RTF cannot state allowHyphenationAtTrackBottom —
                 // 26.8.1.1's flat export of rtf/lorem_ipsum.rtf shows `loext:hyphenation-zone="360"`,
                 // `fo:hyphenation-keep="page"` and `loext:hyphenation-keep-line="true"` on Standard.
-                Hyphenation = _autoHyphenation && !state.SuppressesHyphenation
-                    ? new HyphenationRules(
-                        Zone: Core.Units.Length.FromTwips(360), NoCaps: _noHyphenateCaps, KeepsLastLine: true)
+                //
+                // And a paragraph's or its style's `\hyphpar` decides over both: it is a
+                // suppressAutoHyphens, which DomainMapper maps to `ParaIsHyphenation = !value` whatever the
+                // document says, so `\hyphpar` alone hyphenates a document that never stated `\hyphauto`
+                // (`probes/rtf-hyphpar/`, 26.8's daily). The zone and the keep are set on Standard only
+                // when one of `\hyphauto`, `\hyphcaps0` or `\widowctrl` is (SettingsTable.cxx:751-752).
+                Hyphenation = state.Hyphenates ?? _autoHyphenation
+                    ? _autoHyphenation || _noHyphenateCaps || _widowControl
+                        ? new HyphenationRules(
+                            Zone: Core.Units.Length.FromTwips(360), NoCaps: _noHyphenateCaps, KeepsLastLine: true)
+                        : HyphenationRules.Default
                     : null,
             },
             FamilyOf(state),
@@ -1473,7 +1525,13 @@ public sealed partial class RtfDocumentReader
             state.AutoKerning,
             state.WidthPerCent,
             flow.LayoutAnchors.Count == 0 ? null : [.. flow.LayoutAnchors],
-            HeadingLevelOf(state) ?? 0);
+            HeadingLevelOf(state) ?? 0,
+
+            // writerfilter does not turn a paragraph inside a table into a frame
+            // (`CheckUnregisteredFrameConversion`, `DomainMapper_Impl.cxx`:2085-2097).
+            flow.InTable ? null : state.Frame.Request(),
+            state.ParagraphBorders.ToSet(ColourAt),
+            ColourAt(state.ShadingColourIndex));
 
         if (cell is not null) cell.Add(new RtfLayoutBlock(recorded));
         else into!.Add(recorded);
@@ -1532,16 +1590,31 @@ public sealed partial class RtfDocumentReader
     /// Both words carry the automatic pair with them: they shrink the text as well as moving it, and neither
     /// number is in the file. LibreOffice's RTF importer turns them straight into <c>w:vertAlign</c>'s two
     /// values, so the answer is the same one the DOCX reader reaches. <c>\up</c> and <c>\dn</c> state a
-    /// half-point offset instead and are not read yet; a document using one gets no shift rather than a
-    /// wrong one.
+    /// half-point offset instead, as <c>w:position</c>'s sprm (<c>rtfdispatchvalue.cxx</c>:943-949, default
+    /// 6), so dmapper defers it to the run and it wins over a <c>\super</c> beside it: a percentage of the
+    /// run's size, rounded, at full size — see <c>WordParagraphFormats.Positioned</c>, which is the same rule.
     /// </remarks>
     private static Layout.Escapement EscapementOf(GroupState state)
-        => state.VerticalPosition switch
+    {
+        if (state.PositionHalfPoints != 0)
+        {
+            double points = SizeOf(state).Points;
+            if (points > 0)
+            {
+                double percent = Math.Round(
+                    state.PositionHalfPoints / 2.0 / points * 100, MidpointRounding.AwayFromZero);
+                int clamped = (int)Math.Clamp(percent, -13999, 13999);
+                return clamped == 0 ? Layout.Escapement.None : new Layout.Escapement(clamped, 100);
+            }
+        }
+
+        return state.VerticalPosition switch
         {
             > 0 => Layout.Escapement.Superscript,
             < 0 => Layout.Escapement.Subscript,
             _ => Layout.Escapement.None,
         };
+    }
 
     /// <summary>
     /// The body's blocks in document order, with the staging list the paragraph recorder appends to.
@@ -2021,6 +2094,7 @@ public sealed partial class RtfDocumentReader
             Flow finished = CurrentFlow;
             FinishParagraph(finished, state);
             CloseTablesDeeperThan(finished, 0);
+            EndFurnitureAfterTable(finished, state);
             _flows.RemoveAt(_flows.Count - 1);
 
             // Balances the paragraph FinishParagraph left open for text that never came.
@@ -2060,6 +2134,42 @@ public sealed partial class RtfDocumentReader
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Gives a header or footer that ends with a table the empty paragraph Writer puts after it, in the
+    /// default paragraph style and nothing else.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A Writer text cannot end with a table, so the importer's final paragraph follows it; on the 26.8 branch
+    /// that paragraph is imported as <em>Standard</em> with no direct formatting at all when the group closes
+    /// with nothing typed after the <c>\row</c> — the 26.8 daily's flat export of
+    /// <c>features/header-table.rtf</c> writes <c>&lt;text:p text:style-name="Standard"/&gt;</c> where 26.2.4.2
+    /// wrote a <c>P2</c> carrying the last cell's Carlito 9 pt. Measured on one-attribute variants of that
+    /// file: <c>\row\pard }</c>, <c>\row}</c>, <c>\row\pard\fs36 }</c>, <c>\row\pard\plain\fs36 }</c> and
+    /// <c>\row\pard\s20\fs36 }</c> all put the body's first baseline at 749.89 (26.2.4.2: 752.34, 741.69,
+    /// 742.99 and 741.69 for the stated sizes) — the header outgrowing its 0.31 in minimum by a 12 pt
+    /// Liberation Serif line over a 9 pt row. A <c>\par</c> after the row keeps the stated size in both
+    /// (<c>\fs36\par</c>: 741.69), and so does a trailing paragraph holding text, which are the
+    /// paragraphs the reader already records; a header without a table adds nothing in either.
+    /// </para>
+    /// <para>
+    /// Not extracted: the paragraph is empty, and the content tree has never held one for the case.
+    /// </para>
+    /// </remarks>
+    private void EndFurnitureAfterTable(Flow finished, GroupState state)
+    {
+        if (FurnitureList(finished) is not { Paragraphs.Count: 0, Blocks: [.., { Table: not null }] }) return;
+
+        GroupState standard = new() { Destination = state.Destination };
+        standard.ResetParagraph();
+        standard.ResetCharacter();
+        standard.FontIndex = _defaultFontIndex;
+        SelectParagraphStyle(standard, 0);
+
+        finished.InTable = false;
+        RecordLayoutParagraph(finished, standard, string.Empty);
     }
 
     /// <summary>
@@ -2117,6 +2227,7 @@ public sealed partial class RtfDocumentReader
             Alignment = Said("ql", "qr", "qc", "qj", "qd", "qk") ? state.Alignment : null,
             SpaceBeforeTwips = Said("sb") ? state.SpaceBefore : null,
             KeepWithNext = Said("keepn") ? state.KeepWithNext : null,
+            Hyphenates = Said("hyphpar") ? state.Hyphenates : null,
         };
     }
 
@@ -2174,6 +2285,7 @@ public sealed partial class RtfDocumentReader
         if (f.SpaceBeforeTwips is { } before) state.SpaceBefore = before;
         if (f.SpaceAfterTwips is { } after) state.SpaceAfter = after;
         if (f.KeepWithNext is { } keep) state.KeepWithNext = keep;
+        if (f.Hyphenates is { } hyphenates) state.Hyphenates = hyphenates;
     }
 
     /// <summary>
@@ -2186,6 +2298,7 @@ public sealed partial class RtfDocumentReader
         if (f.SpaceBeforeTwips is not null) state.SpaceBefore = null;
         if (f.SpaceAfterTwips is not null) state.SpaceAfter = null;
         if (f.KeepWithNext is not null) state.KeepWithNext = false;
+        if (f.Hyphenates is not null) state.Hyphenates = null;
     }
 
     /// <summary>

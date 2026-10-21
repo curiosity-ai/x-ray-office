@@ -102,11 +102,11 @@ public sealed class OfficeMathBoxTests
     /// </summary>
     /// <remarks>
     /// <para>
-    /// This tree draws every one of them 3.46 pt taller than the reference — the same constant whether
+    /// This tree drew every one of them 3.46 pt taller than the reference — the same constant whether
     /// or not there are limits and whatever the body is — because the operator's rectangle is not a
     /// row of text: <c>SmRect</c>'s constructor clips a StarMath-font symbol to its glyph's own bounds
-    /// (<c>bAllowSmaller</c>, <c>starmath/source/rect.cxx</c>:242-248), and the box approximates it by
-    /// a text height at the operator's size. That is a calibration of its own and is left.
+    /// (<c>bAllowSmaller</c>, <c>starmath/source/rect.cxx</c>:242-248), at the font height
+    /// <c>SmOperNode::CalcSymbolHeight</c> gives it. <see cref="EveryNaryArmMatchesTheReference"/> pins both.
     /// </para>
     /// <para>
     /// What the arms do pin is where the limits go, and that is independent of the constant: the
@@ -123,6 +123,28 @@ public sealed class OfficeMathBoxTests
         ["nary-delim-frac"] = ("""<m:oMath><m:nary><m:naryPr><m:chr m:val="∑"/></m:naryPr><m:sub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>n=1</m:t></m:r></m:sub><m:sup><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>∞</m:t></m:r></m:sup><m:e><m:d><m:dPr></m:dPr><m:e><m:f><m:num><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>a</m:t></m:r></m:num><m:den><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>b</m:t></m:r></m:den></m:f></m:e></m:d></m:e></m:nary></m:oMath>""", 32.602),
         ["nary-sub-only-frac"] = ("""<m:oMath><m:nary><m:naryPr><m:chr m:val="∑"/><m:supHide m:val="1"/></m:naryPr><m:sub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>n=1</m:t></m:r></m:sub><m:sup></m:sup><m:e><m:d><m:dPr></m:dPr><m:e><m:f><m:num><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>a</m:t></m:r></m:num><m:den><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>b</m:t></m:r></m:den></m:f></m:e></m:d></m:e></m:nary></m:oMath>""", 31.406),
     };
+
+    /// <summary>Every n-ary arm lands within 0.1 pt of the reference's own height, with no constant left over.</summary>
+    /// <remarks>Measured: +0.026, +0.030, +0.026, −0.032 and −0.083 pt, where a 3.46 pt constant stood.</remarks>
+    [Fact]
+    public void EveryNaryArmMatchesTheReference()
+    {
+        List<string> wrong = [];
+
+        foreach ((string name, (string omml, double want)) in NaryArms)
+        {
+            double got = Measure(omml);
+            if (Math.Abs(got - want) > 0.1) wrong.Add($"{name}: {got:F3} against {want:F3}");
+        }
+
+        wrong.ShouldBeEmpty();
+    }
+
+    /// <summary>An integral's glyph is taller than a sum's: 34.214 pt against 32.544 with the same limits.</summary>
+    [Fact]
+    public void AnIntegralIsTallerThanASumByItsGlyph()
+        => (Measure(NaryArms["nary-x"].Omml.Replace("∑", "∫")) - Measure(NaryArms["nary-x"].Omml))
+            .ShouldBe(34.214 - 32.544, 0.1);
 
     /// <summary>A body taller than the operator does not push the limits out — the reference's own answer.</summary>
     [Fact]

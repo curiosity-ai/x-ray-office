@@ -307,6 +307,24 @@ internal static class XlsxDrawings
             }
         }
 
+        // A glow and a soft edge, which Calc draws as every application does — they are `SdrObject`
+        // attributes and `svx`'s shape primitives add them. On a picture or a shape, not a group
+        // (`shape.cxx`:2313-2329) and not a connector, which is an `SdrEdgeObj` and draws neither.
+        XElement? effectOwner = shape is { Name.LocalName: "sp" } ? shape : picture;
+        XElement? effectProperties = Child(effectOwner, DrawingNamespace, "spPr");
+        XElement? effects = Child(effectProperties, MainNamespace, "effectLst");
+        if (effects is not null)
+        {
+            bool twice = ReferenceEquals(effectOwner, shape) && IsRectangle(effectProperties);
+            drawing = drawing with
+            {
+                Glow = DrawingEffects.Glow(effects, theme) is { } glow
+                    ? new ShapeGlow(glow.Colour, glow.Radius, twice)
+                    : null,
+                SoftEdge = DrawingEffects.SoftEdge(effects) is { } soft ? new ShapeSoftEdge(soft, twice) : null,
+            };
+        }
+
         // A shape's own interior can be a bitmap rather than a colour: `a:blipFill` inside
         // `xdr:sp/xdr:spPr`, which is a *fill*, not an `xdr:pic`. It is drawn here rather than in
         // `XlsxShapeInk` because the picture below already does every part of the work — the blip
@@ -463,7 +481,9 @@ internal static class XlsxDrawings
 
         return chartSpace is null
             ? null
-            : DrawingChartex.Read(chartSpace, theme, styles, ranges?.Resolver(true));
+            : DrawingChartex.Read(
+                chartSpace, theme, styles, ranges?.Resolver(true),
+                ranges is null ? null : ranges.Expand);
     }
 
     /// <summary>
@@ -758,6 +778,19 @@ internal static class XlsxDrawings
     /// <c>xlsx/test_01.xlsm</c>'s two charts came out 443 pt wide where 26.8.1.1 keeps the
     /// stated 326.2 pt. The children are DrawingML's, <c>a:off</c> and <c>a:ext</c>.
     /// </remarks>
+    /// <summary>
+    /// Whether a shape's geometry is the rectangle, which its engine renders from an
+    /// <c>SdrRectObj</c> carrying the shape's own effects, so that they apply twice — see
+    /// <see cref="ShapeGlow.Twice"/>. A shape stating no geometry is imported as one.
+    /// </summary>
+    private static bool IsRectangle(XElement? properties)
+    {
+        if (Child(properties, MainNamespace, "custGeom") is not null) return false;
+
+        return Child(properties, MainNamespace, "prstGeom") is not { } preset
+               || Attribute(preset, "prst") is null or "rect";
+    }
+
     private static XElement? Transform(XElement? shape)
         => shape?.Name.LocalName == "graphicFrame" && shape.Name.NamespaceName == DrawingNamespace
             ? Child(shape, DrawingNamespace, "xfrm")

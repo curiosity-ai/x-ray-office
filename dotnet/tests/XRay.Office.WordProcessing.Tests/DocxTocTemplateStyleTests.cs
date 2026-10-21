@@ -1,11 +1,8 @@
-using System.IO.Compression;
-using System.Xml.Linq;
 using XRay.Office.Core.Documents;
 using XRay.Office.Core.Units;
 using XRay.Office.TestKit;
 using XRay.Office.Text.Layout;
 using XRay.Office.WordProcessing.Layout;
-using XRay.Office.WordProcessing.Ooxml;
 using Shouldly;
 
 namespace XRay.Office.WordProcessing.Tests;
@@ -22,16 +19,16 @@ namespace XRay.Office.WordProcessing.Tests;
 /// 26.2.4.2 imports every paragraph in one of them, anywhere in the document, with its <c>w:pPr</c>
 /// beyond the <c>w:pStyle</c> discarded. That is a quirk of one importer rather than anything the
 /// format says, and reproducing it means drawing a document differently from the application that
-/// wrote it. <c>DocxTocStyles.Variable</c> switches it on for a run scored against LibreOffice;
-/// <c>dotnet/TODO.word-parity.md</c> records what leaving it off costs on the corpus.
+/// wrote it, so this tree does not, and LibreOffice's reading is not available here.
+/// <c>dotnet/TODO.word-parity.md</c> records what that costs on the corpus.
 /// </para>
 /// <para>
-/// Both halves are pinned here, because the expensive half of this round was the measurement and it
-/// should not have to be made twice. The first group asserts what this tree draws — the paragraph's
-/// own formatting. The second asserts the reference's answer through
-/// <c>DocxTocStyles.Resolve</c>/<c>Prune</c>, against 26.2.4.2's own <c>--convert-to fodt</c> of the
-/// committed fixture <c>tests/corpus/features/words-toc-template-styles.docx</c>
-/// (<c>probes/tocstyle-r160/reference-arms.txt</c>).
+/// The tests assert what this tree draws — the paragraph's own formatting — on the committed fixture
+/// <c>tests/corpus/features/words-toc-template-styles.docx</c>. The reference's answer for each arm,
+/// read out of 26.2.4.2's own <c>--convert-to fodt</c>, is in
+/// <c>probes/tocstyle-r160/reference-arms.txt</c>: five arms voided, and the four controls
+/// (<c>heading 4</c>, a <c>w:customStyle</c> named <c>heading 5</c>, a <c>w:customStyle</c> with an
+/// outline level, the built-in <c>Title</c>) untouched.
 /// </para>
 /// <para>
 /// Three further controls could not live in that fixture, because the registration is document-wide
@@ -80,78 +77,6 @@ public sealed class DocxTocTemplateStyleTests
     [Fact]
     public void AnUnnamedHeadingKeepsItsFormatting()
         => Arm("G-other-style").SpaceAfter.ShouldBe(Length.Zero);
-
-    /// <summary>
-    /// The reference's rule, pinned against its own resolved view of the same fixture.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Five arms are voided and four are not, and the four are what make the rule narrow enough to
-    /// carry: <c>heading 4</c> while the switch names <c>heading 3</c>; a <c>w:customStyle</c>
-    /// wearing the name <c>heading 5</c>; a <c>w:customStyle</c> with an outline level of its own;
-    /// and the built-in <c>Title</c>. So it is the built-in heading, and not the name, the outline
-    /// level, or any built-in style.
-    /// </para>
-    /// <para>
-    /// Through <c>Resolve</c> rather than through the layout, because the switch is an environment
-    /// variable and every other test in the process would see it.
-    /// </para>
-    /// </remarks>
-    [Fact]
-    public void TheReferenceVoidsOnlyTheBuiltInHeadingsTheSwitchNames()
-    {
-        (XElement body, WordStyles styles) = Package();
-        IReadOnlySet<string> voided = DocxTocStyles.Resolve(body, styles);
-
-        voided.ShouldBe(["Heading3"], ignoreOrder: true);
-
-        foreach (string label in new[]
-                 { "A-named-spacing", "B-named-jc", "C-named-ind", "E-named-before" })
-        {
-            Pruned(body, voided, label).ShouldBe([], $"{label} keeps nothing of its own");
-        }
-
-        // The one exception, and the only thing that survives the pruning.
-        Pruned(body, voided, "D-named-break").ShouldBe(["pageBreakBefore"]);
-
-        foreach (string label in new[]
-                 { "G-other-style", "I-custom-name", "J-custom-outline", "K-builtin-title" })
-        {
-            Pruned(body, voided, label).ShouldBe(["spacing"], $"{label} is untouched");
-        }
-    }
-
-    /// <summary>The names of the properties an arm's <c>w:pPr</c> keeps, <c>w:pStyle</c> aside.</summary>
-    private static List<string> Pruned(XElement body, IReadOnlySet<string> voided, string label)
-    {
-        XElement paragraph =
-            body.Descendants().First(e => e.Name.LocalName == "p" && e.Value.StartsWith(label, StringComparison.Ordinal));
-
-        XElement? properties = DocxTocStyles.Prune(Word.Child(paragraph, "pPr"), voided);
-        return
-        [
-            .. properties!.Elements()
-                .Select(child => child.Name.LocalName)
-                .Where(name => name != "pStyle"),
-        ];
-    }
-
-    private static (XElement Body, WordStyles Styles) Package()
-    {
-        using ZipArchive zip = ZipFile.OpenRead(Corpus.Require(Fixture));
-
-        XElement document = Load(zip, "word/document.xml");
-        WordStyles styles = new();
-        styles.Add(Load(zip, "word/styles.xml"));
-
-        return (Word.Child(document, "body")!, styles);
-
-        static XElement Load(ZipArchive archive, string name)
-        {
-            using Stream stream = archive.GetEntry(name)!.Open();
-            return XElement.Load(stream);
-        }
-    }
 
     private static ParagraphFormat Arm(string label)
     {

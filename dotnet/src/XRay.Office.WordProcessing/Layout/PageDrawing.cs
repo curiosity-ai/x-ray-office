@@ -381,30 +381,17 @@ public static class PageDrawing
 
         (GraphicsPath? filled, GraphicsPath? stroked) = Outlines(frame);
 
-        Turned(sink, shape);
+        // A glow under the shape, and a soft edge in place of its fill, picture and border. See
+        // `FrameEffects`.
+        bool softened = FrameEffects.Draw(
+            frame, filled, stroked, shape, sink,
+            target =>
+            {
+                DrawInk(frame, filled, shape, target);
+                DrawFrameBorder(frame, stroked, shape, target);
+            });
 
-        // A gradient before a colour, because the two are never both set and a gradient is the
-        // one that needs the placed rectangle: it is carried unplaced on the frame and becomes a
-        // paint here, against the area the layout engine settled on.
-        if (frame.Frame.Gradient is { } ramp)
-        {
-            GradientPaint paint = ramp.Paint(frame.Ink);
-            if (filled is null) Fill(frame.Ink, paint, sink);
-            else sink.FillPath(filled, paint);
-        }
-        else if (frame.Frame.Fill is { } fill)
-        {
-            if (filled is null) Fill(frame.Ink, fill, sink);
-            else sink.FillPath(filled, Paint.Solid(fill));
-        }
-
-        if (frame.Frame.Chart is { } chart)
-            FrameChart.Draw(sink, chart, frame.Ink, frame.Frame.ChartFontFamily);
-        else if (frame.Frame.Vector is { } vector && !vector.Value.IsEmpty)
-            DrawPicture(sink, frame, filled, vector, null);
-        else if (frame.Frame.Image is { } image) DrawPicture(sink, frame, filled, null, image);
-
-        Upright(sink, shape);
+        if (!softened) DrawInk(frame, filled, shape, sink);
 
         // The frame's own fill *is* the background an automatic font colour resolves against, and the
         // reason it was not, for four rounds, is that the two witnesses against it were misread.
@@ -470,6 +457,41 @@ public static class PageDrawing
             if (clips) sink.Restore();
         }
 
+        if (!softened) DrawFrameBorder(frame, stroked, shape, sink);
+    }
+
+    /// <summary>A frame's fill and its picture or chart, in its turned space.</summary>
+    private static void DrawInk(PlacedFrame frame, GraphicsPath? filled, AffineTransform? shape, IDrawingSink sink)
+    {
+        Turned(sink, shape);
+
+        // A gradient before a colour, because the two are never both set and a gradient is the
+        // one that needs the placed rectangle: it is carried unplaced on the frame and becomes a
+        // paint here, against the area the layout engine settled on.
+        if (frame.Frame.Gradient is { } ramp)
+        {
+            GradientPaint paint = ramp.Paint(frame.Ink);
+            if (filled is null) Fill(frame.Ink, paint, sink);
+            else sink.FillPath(filled, paint);
+        }
+        else if (frame.Frame.Fill is { } fill)
+        {
+            if (filled is null) Fill(frame.Ink, fill, sink);
+            else sink.FillPath(filled, Paint.Solid(fill));
+        }
+
+        if (frame.Frame.Chart is { } chart)
+            FrameChart.Draw(sink, chart, frame.Ink, frame.Frame.ChartFontFamily);
+        else if (frame.Frame.Vector is { } vector && !vector.Value.IsEmpty)
+            DrawPicture(sink, frame, filled, vector, null);
+        else if (frame.Frame.Image is { } image) DrawPicture(sink, frame, filled, null, image);
+
+        Upright(sink, shape);
+    }
+
+    /// <summary>A frame's border, in its turned space.</summary>
+    private static void DrawFrameBorder(PlacedFrame frame, GraphicsPath? stroked, AffineTransform? shape, IDrawingSink sink)
+    {
         if (frame.Frame.BorderColour is not { } colour) return;
         if (frame.Frame.BorderWidth <= Length.Zero) return;
 
@@ -1355,6 +1377,16 @@ public static class PageDrawing
 
             DocRect next = ShadeArea(area, paragraph, top, bottom);
 
+            // A box inside the indents is filled to its outer edge, rules and distances included.
+            if (paragraph.Borders is { InsideIndents: true } box)
+            {
+                Length left = box.Left?.Allowance ?? Length.Zero;
+                Length right = box.Right?.Allowance ?? Length.Zero;
+                next = new DocRect(
+                    next.X - left, next.Y - box.Above,
+                    next.Width + left + right, next.Height + box.Above + box.Below);
+            }
+
             // Joined when the paragraph immediately before was filled the same way: the rectangle grows
             // downwards over whatever sat between the two, which is the space one's spacing-after and the
             // other's spacing-before left blank.
@@ -1745,7 +1777,10 @@ public static class PageDrawing
                     new DocPoint(pen, baseline - run.Rise),
                     spaceAdd,
                     run.Tracking,
-                    run.WidthScale);
+                    run.WidthScale,
+                    paragraph.Format.TextGrid?.Characters,
+                    paragraph.GridCharacters,
+                    run.Start);
 
                 runs.Add((glyphRun, run.ColourOn(background)));
 
@@ -2673,7 +2708,10 @@ public static class PageDrawing
         DocPoint origin,
         Length spaceAdd,
         Length tracking = default,
-        double widthScale = 1.0)
+        double widthScale = 1.0,
+        CharacterGrid? grid = null,
+        bool[]? gridCharacters = null,
+        int textStart = 0)
     {
         List<PositionedGlyph> glyphs = new(shaped.Glyphs.Count);
         List<int> clusters = new(shaped.Glyphs.Count);
@@ -2688,6 +2726,19 @@ public static class PageDrawing
             // 40-twip spacing comes to 41.958 + 14 x 2 pt — and a justification share is decided after
             // the line's width is known.
             Length advance = Squeezed(shaped.Scale(glyph.Advance, emSize), widthScale);
+
+            // The page's character grid gives an East Asian cluster its cell for an advance and, when it
+            // snaps to characters, a place inside it — `MeasuredParagraph` charged the same cells, so the
+            // pen and the line break agree. See `CharacterGrid`.
+            Length cellOffset = Length.Zero;
+            if (grid is { } cells && gridCharacters is not null && advance > Length.Zero
+                && glyph.Cluster >= 0 && glyph.Cluster < text.Length
+                && textStart + glyph.Cluster < gridCharacters.Length
+                && gridCharacters[textStart + glyph.Cluster])
+            {
+                cellOffset = cells.Offset(advance, text[glyph.Cluster]);
+                advance = cells.Cell(advance);
+            }
 
             // Every glyph carries its tracking, the run's last included, so the text after a tracked
             // run starts one tracking unit further on.
@@ -2736,7 +2787,7 @@ public static class PageDrawing
             glyphs.Add(new PositionedGlyph(
                 glyph.GlyphId,
                 new DocPoint(
-                    pen + Squeezed(shaped.Scale(glyph.OffsetX, emSize), widthScale),
+                    pen + cellOffset + Squeezed(shaped.Scale(glyph.OffsetX, emSize), widthScale),
                     -shaped.Scale(glyph.OffsetY, emSize)),
                 advance));
 

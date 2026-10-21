@@ -68,6 +68,12 @@ public sealed partial class DocxLayoutSource
     /// <summary>The document's automatic hyphenation, or null when <c>w:autoHyphenation</c> is off.</summary>
     private readonly HyphenationRules? _hyphenation;
 
+    /// <summary>
+    /// The hyphenation a paragraph stating <c>w:suppressAutoHyphens w:val="0"</c> takes when the document's
+    /// is off; see <see cref="Hyphenation(XElement?, bool)"/>.
+    /// </summary>
+    private readonly HyphenationRules _statedHyphenation;
+
     /// <summary>What <c>w:beforeAutospacing</c> and <c>w:afterAutospacing</c> stand for here.</summary>
     private readonly Length _autoSpacing;
 
@@ -158,6 +164,7 @@ public sealed partial class DocxLayoutSource
         _defaultTabInterval = TabInterval(settings);
         _compatibilityMode = CompatibilityMode(settings);
         _hyphenation = Hyphenation(settings);
+        _statedHyphenation = Hyphenation(settings, documentWide: false)!;
         WordCompatibility compatibility = WordCompatibility.Read(settings);
         _autoSpacing = AutoSpacing(settings, compatibility);
         _underlinesTrailingSpace = compatibility.UnderlinesTrailingSpace;
@@ -366,15 +373,8 @@ public sealed partial class DocxLayoutSource
         _pendingBelowTarget = -1;
         _indexFieldDepth = 0;
         _sectionLeftMargins = LeftMargins(body);
-        _sectionGridPitches = GridPitches(body);
-
-        // Before the walk, because a REF may name a bookmark the walk has not reached yet -- which in
-        // a document whose references point forward is most of them. See `DocxReferenceFields`.
-        _referenceText = DocxReferenceFields.Expansions(body);
-
-        // And before it for the same reason: a paragraph loses its direct formatting because of a
-        // TOC field that may be written after it. See `DocxTocStyles`.
-        _tocVoidedStyles = DocxTocStyles.Voided(body, _styles);
+        _sectionGrids = SectionGrids(body);
+        _textWidth = TextWidthOf(body);
 
         // The body is where the document's lists start counting. Reset rather than assumed clean,
         // because the numbering may be the same instance the extraction pass already walked.
@@ -392,6 +392,7 @@ public sealed partial class DocxLayoutSource
         }
 
         SuppressAutoSpacingInLists(blocks);
+        blocks = LiftParagraphFrames(blocks);
 
         // The first-section arm of the rule `SuppressAutoSpacingInShape` ports: the document's first
         // paragraph takes no HTML auto margin either (`DomainMapper_Impl.cxx`:2461). Measured on an
@@ -642,6 +643,11 @@ public sealed partial class DocxLayoutSource
             List<PageBlock> blocks = [];
             Walk(element, blocks, depth: 0);
             SuppressAutoSpacingInLists(blocks);
+
+            // A running head's framed paragraphs are framed too: measured on the 26.8 daily, a
+            // `w:framePr` paragraph in a header is placed against the header's column like a body one.
+            // A text box's content comes through here as well, and there writerfilter frames nothing.
+            if (InHeaderFooter && _frameDepth == 0) blocks = LiftParagraphFrames(blocks);
             ParagraphBorderJoin.Apply(blocks);
             return blocks;
         }
@@ -678,6 +684,37 @@ public sealed partial class DocxLayoutSource
     /// before a page exists. A section stating no <c>w:pgMar</c> gets Letter's inch, which is what
     /// <c>SectionPropertyMap</c>'s constructor gives it — see <see cref="PageGeometry.Letter"/>.
     /// </remarks>
+    /// <summary>The first section's text width, which a drop cap's line count is decided at.</summary>
+    private Length _textWidth = Length.FromTwips(9360);
+
+    /// <summary>The first section's text width: <c>w:pgSz/@w:w</c> less the two side margins.</summary>
+    private static Length TextWidthOf(XElement body)
+    {
+        XElement? section = body.Descendants(Word.Name("sectPr")).FirstOrDefault();
+        Length width = Twips(Word.Child(section, "pgSz"), "w") ?? PageGeometry.Letter.Size.Width;
+        Length left = Twips(Word.Child(section, "pgMar"), "left") ?? PageGeometry.Letter.Margins.Left;
+        Length right = Twips(Word.Child(section, "pgMar"), "right") ?? PageGeometry.Letter.Margins.Right;
+        Length text = width - left - right;
+        return text > Length.Zero ? text : Length.FromTwips(9360);
+    }
+
+    /// <summary>
+    /// Takes the flow's <c>w:framePr</c> paragraphs out of it and hangs them on their anchors as
+    /// frames, and sets each drop cap into the paragraph after it.
+    /// </summary>
+    /// <remarks>
+    /// After the walk rather than during it, because a run of framed paragraphs is delimited by the
+    /// paragraph <em>after</em> it, and before the border join, because once the frames are out the
+    /// paragraphs either side of them are neighbours. See <see cref="ParagraphFrames"/> and
+    /// <see cref="DocxParagraphFrames"/>.
+    /// </remarks>
+    private List<PageBlock> LiftParagraphFrames(List<PageBlock> blocks)
+        => ParagraphFrames.Lift(
+            blocks,
+            paragraph => DocxParagraphFrames.RequestOf(paragraph.Source as XElement, _styles),
+            widensForBorderSpacing: true,
+            _textWidth);
+
     private static List<Length> LeftMargins(XElement body)
         => [.. body
             .Descendants(Word.Name("sectPr"))
@@ -685,30 +722,32 @@ public sealed partial class DocxLayoutSource
                                ?? PageGeometry.Letter.Margins.Left)];
 
     /// <summary>
-    /// Each section's text-grid pitch, in the order the body states them, or null for a section without a
-    /// grid.
+    /// Each section's text grid, in the order the body states them, or null for a section without one; its
+    /// <see cref="TextGridSnap.Snaps"/> is decided per paragraph by <see cref="TextGridOf"/>.
     /// </summary>
     /// <remarks>
     /// <para>
     /// <c>w:docGrid</c>, as <c>DomainMapper</c> (<c>sw/source/writerfilter/dmapper/DomainMapper.cxx</c>:1253-1295)
-    /// and <c>SectionPropertyMap::CloseSectionGroup</c> (<c>PropertyMap.cxx</c>:1942-1966, 2034) read it: the
+    /// and <c>SectionPropertyMap::CloseSectionGroup</c> (<c>PropertyMap.cxx</c>:1942-2036) read it: the
     /// type <c>default</c> (and an absent type) is no grid; <c>lines</c>, <c>linesAndChars</c> and
     /// <c>snapToChars</c> all snap lines. The pitch travels through hundredths of a millimetre and back to
     /// twips, each step rounded, and one outside 1 to 31680 twips is read as 1; a grid whose line count
-    /// would not fit a 16-bit integer is dropped. An absent <c>w:linePitch</c> is that same 1.
+    /// would not fit a 16-bit integer is dropped. An absent <c>w:linePitch</c> is that same 1. On the way back
+    /// <c>SwTextGridItem::PutValue</c> raises a pitch under 100 twips to 100 (<c>MIN_TEXTGRID_SIZE</c>,
+    /// <c>sw/source/core/layout/atrfrm.cxx</c>:2520-2537, rhbz#1043551).
     /// </para>
     /// <para>
-    /// Only the vertical half: a character grid's widths are not modelled, and nor is the ruby height,
-    /// which a DOCX grid always states as nought.
+    /// The character half is <see cref="CharacterGridOf"/>. The ruby height a DOCX grid always states as
+    /// nought, so it is not modelled.
     /// </para>
     /// </remarks>
-    private static List<Length?> GridPitches(XElement body)
+    private List<TextGridSnap?> SectionGrids(XElement body)
         => [.. body
             .Descendants(Word.Name("sectPr"))
             .Where(section => section.Parent is not { } parent || !Word.Is(parent, "sectPrChange"))
-            .Select(GridPitch)];
+            .Select(SectionGrid)];
 
-    private static Length? GridPitch(XElement section)
+    private TextGridSnap? SectionGrid(XElement section)
     {
         XElement? grid = Word.Child(section, "docGrid");
         string? type = Word.Attribute(grid, "type");
@@ -716,12 +755,86 @@ public sealed partial class DocxLayoutSource
         if (type is not ("lines" or "linesAndChars" or "snapToChars")) return null;
 
         long twips = Word.Integer(Word.Attribute(grid, "linePitch"), out int stated) ? stated : 1;
-        long mm100 = (long)Math.Round(twips * 127.0 / 72.0, MidpointRounding.AwayFromZero);
+        long mm100 = TwipsToMm100Limited(twips);
         if (mm100 < 1 || mm100 > 31680) mm100 = 1;
 
-        long pitch = Math.Max(1, (long)Math.Round(mm100 * 72.0 / 127.0, MidpointRounding.AwayFromZero));
-        return Length.FromTwips(pitch);
+        long pitch = Math.Max(100, Mm100ToTwips(mm100));
+        return new TextGridSnap(Length.FromTwips(pitch), Characters: CharacterGridOf(grid, type));
     }
+
+    /// <summary>
+    /// A section's character grid, or null when its <c>w:docGrid</c> is a grid of lines only.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>linesAndChars</c> and <c>snapToChars</c> are both <c>LINES_AND_CHARS</c>, the second with
+    /// <c>SnapToChars</c> (<c>DomainMapper.cxx</c>:1284-1291) — and either becomes a grid of lines when
+    /// <c>w:charSpace</c> is nought or absent (<c>PropertyMap.cxx</c>:1958-1964).
+    /// </para>
+    /// <para>
+    /// The pitch is <c>CloseSectionGroup</c>'s arithmetic to the letter (<c>PropertyMap.cxx</c>:1968-2035):
+    /// the East Asian font size of the document's defaults (writerfilter's own default is ten points),
+    /// overridden by that of the style whose converted name is <c>Standard</c> — Word's <c>Normal</c> — when
+    /// that style states one (tdf#139418, tdf#107359), as whole twips in
+    /// hundredths of a millimetre; then <c>w:charSpace</c>, a signed number of 4096ths of a point whose top
+    /// twenty bits are the whole points and whose low twelve a fraction scaled to twentieths, each part
+    /// converted on its own; and back to twips through <c>PutValue</c>, at least 100.
+    /// </para>
+    /// <para>
+    /// The base font height the non-snapping mode subtracts is the <c>Standard</c> style's East Asian size
+    /// as the layout reads it (<c>fntcache.cxx</c>:886-894) — the same two sources without the trip through
+    /// hundredths of a millimetre.
+    /// </para>
+    /// </remarks>
+    private CharacterGrid? CharacterGridOf(XElement grid, string type)
+    {
+        if (type == "lines") return null;
+        if (!Word.Integer(Word.Attribute(grid, "charSpace"), out int charSpace) || charSpace == 0) return null;
+
+        int? defaults = HalfPoints(_styles.DefaultRunProperties);
+        int? standard = HalfPoints(_styles.All
+            .FirstOrDefault(style => style.Type == WordStyleType.Paragraph && style.Name == "Normal")
+            ?.RunProperties);
+
+        // `fHeight * 20.0 + 0.5` truncated, of a height in points: a half-point count times ten.
+        long heightTwips = (standard ?? defaults ?? 20) * 10L;
+        long width = TwipsToMm100Limited(heightTwips);
+
+        // "main lives in top 20 bits, and is signed": the mask is unsigned in the C++, and the result
+        // assigned back to a signed integer before the division, which truncates towards nought.
+        int main = unchecked((int)((uint)charSpace & 0xFFFFF000u)) / 0x1000;
+        int fraction = (charSpace & 0x00000FFF) * 20 / 0xFFF;
+        width += TwipsToMm100Limited(main * 20L) + TwipsToMm100Limited(fraction);
+
+        // `PutValue` refuses a width outside 0..65535 twips and the item keeps the one it had; no document
+        // reaches that with a charSpace Word writes, so such a grid is read as one of lines.
+        long widthTwips = Mm100ToTwips(width);
+        if (widthTwips < 0 || widthTwips > ushort.MaxValue) return null;
+
+        return new CharacterGrid(
+            Length.FromTwips(Math.Max(100, widthTwips)),
+            Length.FromTwips(heightTwips),
+            SnapsToCharacters: type == "snapToChars");
+
+        static int? HalfPoints(XElement? runProperties)
+            => Word.Integer(Word.Attribute(Word.Child(runProperties, "sz"), "val"), out int size) ? size : null;
+    }
+
+    /// <summary>
+    /// <c>ConversionHelper::convertTwipToMm100_Limited</c>: anything from 32768 twips up is nought, as Word
+    /// treats it (<c>sw/source/writerfilter/dmapper/ConversionHelper.cxx</c>:423-430), and the rest rounds
+    /// half away from nought (<c>o3tl::MulDiv</c>).
+    /// </summary>
+    private static long TwipsToMm100Limited(long twips)
+        => twips >= 0x8000 ? 0 : RoundedRatio(twips, 127, 72);
+
+    /// <summary><c>o3tl::toTwips</c> of hundredths of a millimetre, rounding half away from nought.</summary>
+    private static long Mm100ToTwips(long mm100) => RoundedRatio(mm100, 72, 127);
+
+    private static long RoundedRatio(long value, long multiplier, long divisor)
+        => value >= 0
+            ? (value * multiplier + divisor / 2) / divisor
+            : (value * multiplier - divisor / 2) / divisor;
 
     /// <summary>The text grid a paragraph being read now snaps to, or null.</summary>
     /// <remarks>
@@ -734,8 +847,8 @@ public sealed partial class DocxLayoutSource
     private TextGridSnap? TextGridOf(XElement? properties)
     {
         if (!_inBody || InHeaderFooter || _frameDepth > 0 || _noteDepth > 0) return null;
-        if (_sectionGridPitches.Count == 0) return null;
-        if (_sectionGridPitches[Math.Clamp(_sectionIndex, 0, _sectionGridPitches.Count - 1)] is not { } pitch)
+        if (_sectionGrids.Count == 0) return null;
+        if (_sectionGrids[Math.Clamp(_sectionIndex, 0, _sectionGrids.Count - 1)] is not { } grid)
             return null;
 
         WordProperty snap = _styles.ResolveParagraphProperty(
@@ -744,14 +857,14 @@ public sealed partial class DocxLayoutSource
             Word.Value(properties, "pStyle") ?? _styles.DefaultStyleId(WordStyleType.Paragraph));
         if (snap.HasValue && !snap.IsOn) return null;
 
-        return new TextGridSnap(pitch, _tableDepth == 0 || _adjustsLineHeightInTable);
+        return grid with { Snaps = _tableDepth == 0 || _adjustsLineHeightInTable };
     }
 
     /// <summary>True while <see cref="Read"/> walks the body, for <see cref="TextGridOf"/>.</summary>
     private bool _inBody;
 
-    /// <summary>Each section's grid pitch; see <see cref="GridPitches"/>.</summary>
-    private List<Length?> _sectionGridPitches = [];
+    /// <summary>Each section's text grid; see <see cref="SectionGrids"/>.</summary>
+    private List<TextGridSnap?> _sectionGrids = [];
 
     /// <summary>
     /// The left margin of the section the walk is in, for a page-anchored table's offset.
@@ -1035,7 +1148,7 @@ public sealed partial class DocxLayoutSource
     /// </param>
     private PageParagraph? Paragraph(XElement element, string? citation = null)
     {
-        XElement? properties = DocxTocStyles.Prune(Word.Child(element, "pPr"), _tocVoidedStyles);
+        XElement? properties = Word.Child(element, "pPr");
 
         // Two character styles, because `w:pPr/w:rPr` is the *paragraph mark's* formatting and not
         // the paragraph's. ECMA-376 names it "Run Properties for the Paragraph Mark", Word applies
@@ -1087,7 +1200,7 @@ public sealed partial class DocxLayoutSource
 
         RunWalker walker = new(
             CitationOf, Symbol, _constants, _footnoteNumber, _endnoteNumber, StyleReferenceText,
-            _indexFieldDepth, ReferenceText,
+            _indexFieldDepth,
             linkTarget: LinksResolvable && citation is null ? LinkTarget : null);
         walker.Walk(element, citation);
 
@@ -1110,7 +1223,7 @@ public sealed partial class DocxLayoutSource
         ParagraphFormat format =
             WordParagraphFormats.Resolve(
                 _styles, properties, _defaultTabInterval, _autoSpacing, _tableStyle,
-                _compatibilityMode >= 15, _hyphenation);
+                _compatibilityMode >= 15, _hyphenation, _statedHyphenation);
 
         // After the walk, because reading a note body or a text box re-enters this method and a list
         // counter advanced from inside a nested flow would number the paragraph after it wrongly.
@@ -1263,39 +1376,6 @@ public sealed partial class DocxLayoutSource
 
         return null;
     }
-
-    /// <summary>
-    /// What each <c>REF</c>-named bookmark expands to, or null when the body quotes none.
-    /// </summary>
-    /// <remarks>
-    /// Document-level and computed up front, unlike <see cref="_styleText"/>: a <c>STYLEREF</c> quotes
-    /// backwards and a <c>REF</c> quotes a name, so the one can be answered as the walk goes and the
-    /// other cannot. Survives into the headers and footers, which are read after the body and may
-    /// quote a bookmark in it.
-    /// </remarks>
-    private Dictionary<string, string>? _referenceText;
-
-    /// <summary>
-    /// The text a <c>REF</c> naming a bookmark draws, or null when this document holds no such mark.
-    /// </summary>
-    /// <remarks>
-    /// Null leaves the producer's cached result in place, which is this reader's standing policy for a
-    /// field it cannot compute: our own bookmark table is what the lookup missed, and Writer's
-    /// "Error: Reference source not found" would be a confident wrong answer where the cache is a
-    /// stale right one.
-    /// </remarks>
-    /// <param name="name">The bookmark the field named.</param>
-    private string? ReferenceText(string name)
-        => _referenceText is not null && _referenceText.TryGetValue(name, out string? text) ? text : null;
-
-    /// <summary>
-    /// The styles whose paragraphs draw none of their own direct paragraph formatting.
-    /// </summary>
-    /// <remarks>
-    /// Empty for every document that states no <c>TOC … \t</c> switch, which is 250 of the corpus's
-    /// 271 DOCX. See <see cref="DocxTocStyles"/> for the measurement and for why this is here.
-    /// </remarks>
-    private IReadOnlySet<string> _tocVoidedStyles = new HashSet<string>(StringComparer.Ordinal);
 
     /// <summary>Whether the paragraph read next begins a page, because the one before ended with a break.</summary>
     private bool _pageBreakPending;
@@ -1565,7 +1645,8 @@ public sealed partial class DocxLayoutSource
                 Tracking: style.Tracking,
                 WidthPerCent: style.WidthPerCent,
                 Item: style.FontItem,
-                Link: range.Link));
+                Link: range.Link,
+                UnescapedEmSize: style.Escapement.Percent != 0 ? style.Size : default));
         }
 
         return varies ? runs : [];
@@ -1889,11 +1970,6 @@ public sealed partial class DocxLayoutSource
         /// What a <c>STYLEREF</c> naming a style quotes, or null when nothing has been read in that
         /// style yet. Supplied by the source because the answer is a paragraph this walker never sees.
         /// </param>
-        /// <param name="referenceText">
-        /// What a <c>REF</c> naming a bookmark draws, or null when the document holds no such mark.
-        /// Supplied by the source because the answer is a bookmark in another paragraph, which a
-        /// per-paragraph walker cannot see.
-        /// </param>
         /// <param name="linkTarget">
         /// Resolves a relationship id to the external address it names, or null where the paragraph's
         /// own part is not the body and the ids would be read against the wrong table.
@@ -1912,7 +1988,6 @@ public sealed partial class DocxLayoutSource
             int endnote = 0,
             Func<string, string?>? styleReference = null,
             int indexFieldDepth = 0,
-            Func<string, string?>? referenceText = null,
             Func<string, string?>? linkTarget = null)
         {
             _linkTarget = linkTarget;
@@ -1922,7 +1997,6 @@ public sealed partial class DocxLayoutSource
             _footnote = footnote;
             _endnote = endnote;
             _styleReference = styleReference;
-            _referenceText = referenceText;
             _indexResults = indexFieldDepth;
             _inheritedIndexResults = indexFieldDepth;
         }
@@ -1943,9 +2017,6 @@ public sealed partial class DocxLayoutSource
 
         /// <summary>The bookmarks the paragraph holds, with the offsets they sit at.</summary>
         internal IReadOnlyList<PageAnchor> Anchors => _anchors;
-
-        /// <summary>What a <c>REF</c> naming a bookmark draws, or null when the source cannot answer.</summary>
-        private readonly Func<string, string?>? _referenceText;
 
         /// <summary>What a <c>FILENAME</c> or <c>TITLE</c> field evaluates to.</summary>
         private readonly ConstantFields _constants;
@@ -2104,11 +2175,11 @@ public sealed partial class DocxLayoutSource
         /// <para>
         /// <strong>Word does not, when the field says not to.</strong> <c>\* MERGEFORMAT</c> means
         /// <em>preserve the formatting of the previous result</em>, which is exactly the cached runs'
-        /// <c>w:rPr</c>; without the switch Word reformats from the field's own. So the default follows
-        /// Word — the rule applies to a field that does not carry the switch — and
-        /// <see cref="WordParity"/> applies it to every field, which is 26.2.4.2's own reading. The
-        /// reference honours the switch nowhere: five of the seven arms carry it and answer the same as
-        /// the one that does not.
+        /// <c>w:rPr</c>; without the switch Word reformats from the field's own. So this tree follows
+        /// Word — the rule applies to a field that does not carry the switch — and deliberately does
+        /// not reproduce 26.2.4.2's reading, which applies it to every field. The reference honours
+        /// the switch nowhere: five of the seven arms carry it and answer the same as the one that
+        /// does not. <c>dotnet/TODO.word-parity.md</c> records the divergence.
         /// </para>
         /// <para>
         /// <strong>Only a field whose value this walk actually writes.</strong> For anything else the
@@ -2121,16 +2192,15 @@ public sealed partial class DocxLayoutSource
         /// Reach, censused over the corpus DOCX on the properties that change the drawn glyphs rather
         /// than on the presence of a <c>w:rPr</c> — a result stating only <c>w:noProof</c>,
         /// <c>w:webHidden</c> or <c>w:lang</c> is formatted identically either way:
-        /// <strong>470 field results in 59 documents</strong> without the switch, which is what moves by
-        /// default, and 106 in 29 with it, which move only under <see cref="WordParity"/>.
+        /// <strong>470 field results in 59 documents</strong> without the switch, which is what moves,
+        /// and 106 in 29 with it, which the reference would move as well and this tree does not.
         /// <c>probes/fieldrpr-r168/census.py</c>.
         /// </para>
         /// </remarks>
         private bool RewritesTheResultOf(string instruction)
             => (FieldInstructions.PageFieldOf(instruction) is not null
                 || ValueOf(instruction) is not null)
-               && (WordParity.ReproduceLibreOffice
-                   || !instruction.Contains("MERGEFORMAT", StringComparison.OrdinalIgnoreCase));
+               && !instruction.Contains("MERGEFORMAT", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
         /// How many index fields' results the walk is inside, so a run's <c>w:rStyle</c> is ignored.
@@ -2205,17 +2275,9 @@ public sealed partial class DocxLayoutSource
                 return _styleReference?.Invoke(style) is { Length: > 0 } quoted ? quoted : null;
             }
 
-            // A REF's text is the bookmark's, recomputed on load -- not the {w:fldChar separate}
-            // result Word cached. An empty expansion is a legitimate answer for a collapsed bookmark
-            // and is *not* taken, because emitting nothing where the cache says something is the one
-            // substitution that cannot be checked against the page.
-            if (FieldInstructions.ReferenceBookmark(instruction) is { } bookmark)
-            {
-                return _referenceText?.Invoke(bookmark) is { Length: > 0 } referenced
-                    ? referenced
-                    : null;
-            }
-
+            // A REF draws the result Word cached, as Word does until the field is updated: nothing
+            // here recomputes it from its bookmark, which is what LibreOffice does on load. See
+            // `TODO.word-parity.md`.
             return FieldInstructions.ConstantFieldOf(instruction) switch
             {
                 ConstantField.FileName => _constants.FileName is { Length: > 0 } name ? name : null,
@@ -3304,10 +3366,20 @@ public sealed partial class DocxLayoutSource
     /// A paragraph takes it unless its <c>w:suppressAutoHyphens</c> says otherwise — see
     /// <see cref="WordParagraphFormats.Resolve"/>.
     /// </para>
+    /// <para>
+    /// With <paramref name="documentWide"/> false this answers for a paragraph that turns hyphenation on
+    /// itself, by a <c>w:suppressAutoHyphens w:val="0"</c> in a document that does not: dmapper maps the
+    /// element to <c>ParaIsHyphenation = !value</c> whatever the settings say, and measured on 26.8's daily
+    /// such a paragraph is hyphenated. The zone, the limit and the keep reach Standard only past
+    /// <c>if (!(m_bAutoHyphenation || m_bNoHyphenateCaps || m_bWidowControl)) return;</c> (:751-752), so
+    /// without <c>w:doNotHyphenateCaps</c> it takes the pool's rules.
+    /// </para>
     /// </remarks>
-    private static HyphenationRules? Hyphenation(XElement? settings)
+    private static HyphenationRules? Hyphenation(XElement? settings, bool documentWide = true)
     {
-        if (!Word.IsOn(Word.Child(settings, "autoHyphenation"))) return null;
+        bool automatic = Word.IsOn(Word.Child(settings, "autoHyphenation"));
+        if (documentWide && !automatic) return null;
+        if (!automatic && !Word.IsOn(Word.Child(settings, "doNotHyphenateCaps"))) return HyphenationRules.Default;
 
         int zone = int.TryParse(
             Word.Attribute(Word.Child(settings, "hyphenationZone"), "val"),

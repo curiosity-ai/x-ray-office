@@ -134,7 +134,37 @@ public sealed partial class OdtLayoutSource
         _breaksWrappedTables = BreaksWrappedTables(settings);
         _tabsRelativeToIndent = TabsRelativeToIndent(settings);
         _rowHeightsIncludeInsets = RowHeightsIncludeInsets(settings);
+        _decoratesTrailingBlank = DecoratesTrailingBlank(settings);
     }
+
+    /// <summary>
+    /// Whether a line's trailing blank carries the underline or strikethrough of the text before it, as the
+    /// document's settings say. See <see cref="PageParagraph.DecoratesTrailingBlank"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// tdf#168777's <c>IsPaintTrailingSpaceDecorations</c> (<c>sw/source/core/text/portxt.cxx</c>:251-258):
+    /// <c>!MS_WORD_COMP_TRAILING_BLANKS || MS_WORD_UL_TRAIL_SPACE</c>, which ODF spells
+    /// <c>MsWordCompTrailingBlanks</c> and <c>MsWordUlTrailSpace</c>
+    /// (<c>sw/source/uibase/uno/SwXDocumentSettings.cxx</c>:239, 291). Both are false when absent
+    /// (<c>DocumentSettingManager.cxx</c>:82 and the compatibility options' defaults), so a native ODF
+    /// document decorates its trailing blanks; only one LibreOffice wrote from a Word file, which states the
+    /// first true, needs the second.
+    /// </para>
+    /// <para>
+    /// Measured on 26.8's daily with one <c>.odt</c> in four settings variants
+    /// (<c>probes/odt-trailblank/</c>): its underlined and struck-through lines end in a 3 pt rule over the
+    /// trailing blank in every variant but <c>MsWordCompTrailingBlanks</c> true with
+    /// <c>MsWordUlTrailSpace</c> false.
+    /// </para>
+    /// </remarks>
+    /// <param name="settings">The document's <c>office:settings</c>, or null.</param>
+    internal static bool DecoratesTrailingBlank(XElement? settings)
+        => Setting(settings, "MsWordCompTrailingBlanks") != "true"
+           || Setting(settings, "MsWordUlTrailSpace") == "true";
+
+    /// <summary>See <see cref="DecoratesTrailingBlank(XElement?)"/>.</summary>
+    private readonly bool _decoratesTrailingBlank;
 
     /// <summary>
     /// Whether tabs and blanks are left out of a line's height, as the document's settings say.
@@ -166,6 +196,12 @@ public sealed partial class OdtLayoutSource
     /// the setting is document-wide.
     /// </remarks>
     private readonly bool _tabsRelativeToIndent;
+
+    /// <summary>
+    /// Whether a drop cap's ink is measured from the baseline (the drop-cap punctuation rule); see
+    /// <see cref="DropCapPunctuation(XElement?)"/>.
+    /// </summary>
+    public bool DropCapPunctuationRule { get; init; } = true;
 
     /// <summary>
     /// Whether a row's declared height carries its insets and its own top rule.
@@ -404,14 +440,65 @@ public sealed partial class OdtLayoutSource
     internal static bool TabsRelativeToIndent(XElement? settings)
         => Setting(settings, "TabsRelativeToIndent") != "false";
 
-    /// <summary>One <c>config:config-item</c>'s value from a document's settings, or null when absent.</summary>
+    /// <summary>Whether a drop cap's ink is measured from the baseline, as the document's settings say.</summary>
     /// <remarks>
-    /// The items are nested in <c>config:config-item-set</c> elements, so this searches by descendant name
-    /// rather than walking the sets: which set a flag lives in is a detail of how LibreOffice groups them,
-    /// and a reader that hard-codes the grouping breaks on the next version that regroups.
+    /// <para>
+    /// The rule (tdf#150200) is on for every document Writer creates (<c>mbDropCapPunctuation(true)</c>,
+    /// <c>DocumentSettingManager.cxx</c>:110) and LibreOffice writes it out, so a file whose configuration
+    /// settings lack the item predates it and is laid out the old way: <c>SwXMLImport</c> turns it off
+    /// when the item is absent (<c>sw/source/filter/xml/xmlimp.cxx</c>:1431-1432, 1638-1644).
+    /// </para>
+    /// <para>
+    /// That code runs only for a <c>config:config-item-set</c> whose <c>config:name</c> is the
+    /// <em>qualified</em> name <c>ooo:configuration-settings</c>, so the prefix has to resolve to the
+    /// OpenOffice.org namespace: a settings part that never declares <c>xmlns:ooo</c> is not configuration
+    /// at all and keeps the default. Measured on the 26.8 daily over one document's settings, bisected item
+    /// by item and then by its root element's declarations: with the declaration and without the item a
+    /// lone opening quotation mark drops at 150.9 pt, with the item at 57.0, and without the declaration at
+    /// 57.0 whatever the items say — flat and packaged alike.
+    /// </para>
+    /// </remarks>
+    /// <param name="settings">The document's <c>office:settings</c>, or null.</param>
+    internal static bool DropCapPunctuation(XElement? settings)
+        => ConfigurationSettings(settings) is not { } configuration
+           || Item(configuration, "DropCapPunctuation") == "true";
+
+    /// <summary>
+    /// The <c>ooo:configuration-settings</c> set, or null when the document has none Writer would read.
+    /// </summary>
+    /// <remarks>
+    /// <c>SwXMLImport::SetConfigurationSettings</c> is the only path any of these items reaches the document
+    /// by, and it runs only for a set whose qualified <c>config:name</c> resolves to the OpenOffice.org
+    /// namespace — see <see cref="DropCapPunctuation"/>. So a set whose prefix is undeclared leaves every
+    /// setting at Writer's own default however its items read: measured on the 26.8 daily with
+    /// <c>TabsRelativeToIndent</c> false, a tab after a 1 in indent lands at 200.80 pt with the declaration
+    /// and at 272.80 — the default's answer — without it.
+    /// </remarks>
+    private static XElement? ConfigurationSettings(XElement? settings)
+        => settings?
+            .Descendants(XName.Get("config-item-set", OdfNamespaces.Config))
+            .FirstOrDefault(IsConfigurationSettings);
+
+    private static bool IsConfigurationSettings(XElement set)
+    {
+        string? name = set.Attribute(XName.Get("name", OdfNamespaces.Config))?.Value;
+        int colon = name?.IndexOf(':', StringComparison.Ordinal) ?? -1;
+        if (name is null || colon <= 0) return false;
+
+        return name[(colon + 1)..] == "configuration-settings"
+               && set.GetNamespaceOfPrefix(name[..colon])?.NamespaceName == "http://openoffice.org/2004/office";
+    }
+
+    /// <summary>One <c>config:config-item</c>'s value from a document's configuration settings, or null.</summary>
+    /// <remarks>
+    /// Only the configuration set is searched, which is the only one Writer reads these from; inside it the
+    /// items are found by descendant name rather than by walking the nesting.
     /// </remarks>
     private static string? Setting(XElement? settings, string name)
-        => settings?
+        => ConfigurationSettings(settings) is { } configuration ? Item(configuration, name) : null;
+
+    private static string? Item(XElement set, string name)
+        => set
             .Descendants(XName.Get("config-item", OdfNamespaces.Config))
             .FirstOrDefault(item =>
                 item.Attribute(XName.Get("name", OdfNamespaces.Config))?.Value == name)?
@@ -1139,7 +1226,7 @@ public sealed partial class OdtLayoutSource
         // preserves are the ones the notes and frames above were recorded against.
         List<PageRun> runs = RunsOf(walker.Ranges, text, face);
 
-        return new PageParagraph
+        PageParagraph read = new()
         {
             SectionIndex = _sectionIndex,
             Text = CaseMapping.Apply(walker.Text, runs),
@@ -1154,6 +1241,7 @@ public sealed partial class OdtLayoutSource
             Shaping = new ShapingOptions(
                 Language: text.Language, DisableKerning: !text.AutoKerning),
             BlanksAreTransparentToHeight = _blanksAreTransparentToHeight,
+            DecoratesTrailingBlank = _decoratesTrailingBlank,
             Fallback = _fonts,
             Runs = runs,
             Fields = walker.Fields,
@@ -1163,6 +1251,41 @@ public sealed partial class OdtLayoutSource
             OutlineLevel = OutlineLevelOf(element),
             Source = element,
         };
+
+        return OdfParagraphFormats.DropCapOf(_styles, styleName) is { Lines: > 1 } drop
+            ? DropCaps.ApplyPrefix(
+                read, drop.Characters, drop.WholeWord, drop.Lines, drop.Distance, BreakWidth,
+                drop.StyleName is { Length: > 0 } dropStyle ? DropStyle(styleName, dropStyle) : null,
+                DropCapPunctuationRule)
+            : read;
+    }
+
+    /// <summary>The width paragraphs are broken at, which a drop cap's line count is decided at.</summary>
+    /// <remarks>The first master's text width, which is the only geometry this source is given.</remarks>
+    public Length BreakWidth { get; init; } = Length.FromTwips(9360);
+
+    /// <summary>
+    /// How a drop cap's <c>style:style-name</c> restyles the dropped letters: its face, size and colour
+    /// laid over the paragraph's, as <c>SwFont::SetDiffFnt</c> lays the character format over the
+    /// portion's font (<c>sw/source/core/text/txtdrop.cxx</c>:615-620).
+    /// </summary>
+    private Func<PageRun, PageRun> DropStyle(string? paragraphStyle, string textStyle)
+    {
+        OdfTextStyle style = Resolve(
+            [new OdfStyleReference(paragraphStyle, OdfStyleFamily.Paragraph),
+             new OdfStyleReference(textStyle, OdfStyleFamily.Text)]);
+        OpenTypeFace? face = Face(style);
+        FontReference? font = _references.GetValueOrDefault(style.FaceKey);
+
+        return run => face is null
+            ? run
+            : run with
+            {
+                Face = face,
+                Font = font,
+                EmSize = style.Size,
+                Colour = style.Colour ?? run.Colour,
+            };
     }
 
     /// <summary>
@@ -1368,7 +1491,8 @@ public sealed partial class OdtLayoutSource
                 Underline: style.Underline,
                 IsStruckThrough: style.IsStruckThrough,
                 WidthPerCent: style.WidthPerCent,
-                Link: range.Link));
+                Link: range.Link,
+                UnescapedEmSize: style.Escapement.Percent != 0 ? style.Size : default));
         }
 
         return varies ? runs : [];

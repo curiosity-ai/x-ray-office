@@ -1,13 +1,16 @@
-# Deliberate divergences from 26.2.4.2, and what they cost the gate
+# Deliberate divergences from LibreOffice, and what they cost the gate
 
-The gate scores this tree against LibreOffice 26.2.4.2's own rendering, so every difference from it
-normally counts against us. **These ones do not, because they are places where 26.2.4.2 is wrong
-about the document and Word is right, and this project wants Word parity.** Each is measured, each
-has a switch, and each costs a gate row that no later round should spend time on.
+The gate scores this tree against LibreOffice's own rendering, so every difference from it normally
+counts against us. **These ones do not, because they are places where LibreOffice is wrong about the
+document and Word is right, and this project follows Word wherever the two disagree.** Each is
+measured, and each costs a gate row that no later round should spend time on.
 
-**One switch turns all of them back on**: `XRAY_OFFICE_LIBREOFFICE_QUIRKS=1`
-(`XRay.Office.WordProcessing.WordParity`). It is one switch rather than one per rule because it is a
-statement about which application the output should resemble, and half of each answer is neither.
+**LibreOffice's reading is not available.** Until 2026-10-21 the first three entries below and the
+table-style one were implemented both ways, with `XRAY_OFFICE_LIBREOFFICE_QUIRKS=1` selecting
+LibreOffice's. That switch and the code behind it were removed: this tree draws Word's answer
+unconditionally, and there is no setting that makes it reproduce these quirks. The entries stay as
+the record of where and why the output differs from the reference, with the measurements taken
+while the alternative still existed — a gate row listed here is not a defect to fix.
 
 **Check this file before working a words-track row that will not close.** It is the sibling of
 `TODO.raster-ceiling.md`, which lists the rows the gate cannot win for a different reason: there
@@ -28,18 +31,18 @@ introduced; the seat that does the discarding is not located.
 
 **Word**: honours the paragraph.
 
-**This tree**: honours the paragraph. `DocxTocStyles` implements the reference's rule and the
-switch above turns it on for a run that wants to agree with LibreOffice instead. Nine arms and
-three controls are in
-`probes/tocstyle-r160/results.md`, and both halves are pinned by
-`DocxTocTemplateStyleTests`.
+**This tree**: honours the paragraph. The reference's rule was implemented as `DocxTocStyles` from
+round 160 and removed with the switch. Nine arms and three controls are in
+`probes/tocstyle-r160/results.md` (the reference's answer per arm in its `reference-arms.txt`), and
+`DocxTocTemplateStyleTests` pins Word's.
 
 **Reach**: 21 of the 271 corpus DOCX state a `\t` switch and **7** hold a paragraph it voids, 129
 paragraphs in all — `SPA-11_mcar_part-11_v2.9` 87, `OM template for non-complex NCC operators` 18,
 `hdss-bulletin-issue-285-25-june-2025` 9, the two FAA Holdover Tables 6 each,
 `SPA-06_mcar_part-6_and_IS_v2.9` 2, `report-template` 1.
 
-**What it costs**, measured by rendering all 271 with the rule on and with it off:
+**What it costs**, measured by rendering all 271 with the rule on and with it off, while it could
+still be switched on:
 
 | document | 26.2.4.2 | this tree | why |
 |---|---|---|---|
@@ -49,17 +52,17 @@ paragraphs in all — `SPA-11_mcar_part-11_v2.9` 87, `OM template for non-comple
 | `SPA-06_mcar_part-6_and_IS_v2.9.docx` | 85p, 142 938 | 85p, 142 938 — *exact* | likewise |
 | the other four | — | unmoved on pages and characters | — |
 
-So the rule is worth one page on each of the two Holdover Tables, and switching it off puts two
+So the rule is worth one page on each of the two Holdover Tables, and leaving it out puts two
 other documents back on the reference's character count exactly.
 
 **The second Holdover Table was recorded here as unmoved and is not.** Round 177 rendered both with
-the switch on: `24-25` goes 154 → **155** pages against the reference's 155 and `FAA 2025-26` 166 →
+LibreOffice's rule on, while the switch existed: `24-25` goes 154 → **155** pages against the reference's 155 and `FAA 2025-26` 166 →
 **167** against 167, their alphanumerics landing within 22 and 20. It had been carried in the *"the
 other four"* row above, and that row is wrong for it.
 
 **What that one page is worth on an ink ranking is 321.27 and 93.02**, because every page after the
-lost one is then compared against the wrong page. With the switch on, the two documents' summed
-unsigned ink is **33.35 and 34.73 with not one MAJOR page between them** — so there is no second
+lost one is then compared against the wrong page. With the rule on, the two documents' summed
+unsigned ink was **33.35 and 34.73 with not one MAJOR page between them** — so there is no second
 defect underneath either of them, and a round that takes them off the top of an ink table is
 chasing this entry. `probes/holdover-r177`.
 
@@ -74,8 +77,7 @@ a page of its own, blank, and we do not. Page 72 carries the same 1775 alphanume
 both sides and no row moves; the whole difference is that one empty page.
 
 **Do not chase this row.** The document is otherwise within **51 characters of the reference over
-155 pages** (299 532 against 299 583), and it is page-exact with
-the switch set.
+155 pages** (299 532 against 299 583), and it was page-exact with LibreOffice's rule applied.
 
 
 ---
@@ -91,10 +93,10 @@ bookmark's own text — a `SwGetRefField` with `ReferenceFieldSource::BOOKMARK`
 only F9, or *update fields before printing*, changes what the reader sees. So the two do **not**
 disagree about what a `REF` evaluates to — they disagree about *when*.
 
-**This tree**: draws the cache. `DocxReferenceFields` implements the recomputation behind the
-switch; `DocxReferenceFieldTests` pins Word's answer and the reference's side by side, over the
-twelve arms of `tests/corpus/features/words-reference-field.docx`. `probes/docxref-r158/results.md`
-has the measurements.
+**This tree**: draws the cache. The recomputation was implemented as `DocxReferenceFields` from
+round 158 and removed with the switch. `DocxReferenceFieldTests` pins Word's answer over the twelve
+arms of `tests/corpus/features/words-reference-field.docx`; `probes/docxref-r158/results.md` has the
+measurements and `reference-arms.txt` the reference's answer per arm.
 
 **Reach**: 7 of the 271 corpus DOCX hold a resolvable `REF`; **2** state one whose bookmark says
 something other than the cache.
@@ -132,30 +134,30 @@ result text with it — and **`\* MERGEFORMAT` makes no difference to it**.
 the previous result*, and the previous result's formatting is exactly the cached runs' `w:rPr`.
 Without the switch Word reformats from the field's own, agreeing with the reference.
 
-**This tree**: applies the rule to a field that does **not** carry the switch, which is Word's
-answer and the reference's at once, and the switch above applies it to every field. Only to a
-field this tree actually recomputes — for anything else the cached text *is* what gets drawn, so
+**This tree**: applies the rule to a field that does **not** carry `\* MERGEFORMAT`, which is Word's
+answer and the reference's at once, and never to one that does. Only to a field this tree actually
+recomputes — for anything else the cached text *is* what gets drawn, so
 its own formatting is the right formatting. `DocxLayoutSource.RewritesTheResultOf`;
-`FieldResultFormatTests` pins the default and `probes/fieldrpr-r168/results.md` holds the seven
-arms, of which the reference reproduces six under the switch.
+`FieldResultFormatTests` pins it and `probes/fieldrpr-r168/results.md` holds the seven arms, of
+which this tree reproduced six of the reference's while the switch existed.
 
 **Reach**: censused on the properties that change the drawn glyphs rather than on the presence of
 a `w:rPr` — a result stating only `w:noProof`, `w:webHidden` or `w:lang` is formatted identically
-either way — **470 field results in 59 documents** without the switch and **106 in 29** with it.
+either way — **470 field results in 59 documents** without `\* MERGEFORMAT` and **106 in 29** with it.
 **The renderings that move are one and four**: in 58 of the 59 the cached result's `w:rPr` happens
 to state what the instruction run or the style states anyway.
 
-**What it costs.** Nothing by default: 1 of 59 renderings moves, no gate verdict either way, and
-the mover (`AW-104D-RVSM-Aircraft-Approval-Checklist.pdf.docx`) draws its footer page number in
-the weight its instruction run states, which is the weight the reference draws the literal `Page`
-beside it in. Under the switch, isolated from everything already behind it by rendering the base
-binary with the variable set too: 4 of 29 move and no verdict moves.
+**What it costs.** Nothing measurable for Word's half: 1 of 59 renderings moved, no gate verdict
+either way, and the mover (`AW-104D-RVSM-Aircraft-Approval-Checklist.pdf.docx`) draws its footer
+page number in the weight its instruction run states, which is the weight the reference draws the
+literal `Page` beside it in. Applying the rule to `\* MERGEFORMAT` fields as well, as the reference
+does, moved 4 of 29 and no verdict.
 
-| document | 26.2.4.2 | default | under the switch |
+| document | 26.2.4.2 | this tree | with the reference's rule (round 168) |
 |---|---|---|---|
 | **`words/missing-002/docx/CRIF - Spécification technique - Socle applicatif.docx`** | **29 pages** | **28** | **32** |
 
-CRIF is the row this was found on and the reason the switch is the right home for it. Its footer
+CRIF is the row this was found on and the reason the reference's rule is not followed. Its footer
 holds two `FILENAME` fields in one cell whose cached results state 8 pt grey against a
 `Pieddepage` style stating 10 pt black; drawn at 10 pt black the first is about 30 % wider, the
 cell overflows, the footer takes a second line and the body bottom rises 11.5 pt — which is the
@@ -164,7 +166,7 @@ exactly. It also unmasks three further local events (at reference pages 3/4, 9/1
 the footer was hiding, so the page total goes from one out to three out. Those three are the work
 that would make the reference's rule safe to prefer here; until then Word agrees with us.
 
-**A separate defect found with it, and fixed unconditionally rather than switched**: a complex
+**A separate defect found with it, and fixed**: a complex
 field with no `w:fldChar w:fldCharType="separate"` has no cached result, so there was no span for
 pagination to write its value over and the field drew nothing where 26.2.4.2 draws it. With no
 cached result there is nothing for `\* MERGEFORMAT` to preserve, so Word and the reference agree
@@ -226,9 +228,9 @@ accounts for, each span paired against the reference's within its own box
 
 `069` is the pitch alone: 23.10 against 14.00, which is `1.079 × 13.97 + 8` against the bare 13.97.
 
-**Not switched, and this one is deliberate rather than pending.** The other entries in this file
-each have a switch because reproducing them is a *reading* of the file that can be turned on and
-off at one seat. This one is not a reading: it would mean routing a grouped shape's text through a
+**Never implemented, and this one is deliberate rather than pending.** The first entries in this
+file were once implemented both ways because reproducing them was a *reading* of the file at one
+seat. This one is not a reading: it would mean routing a grouped shape's text through a
 different layout engine, so that an author's numbering, indents, spacing and italic are discarded
 on purpose — for five one-page templates that already pass, and 0.05 of ink. The measurement is
 the deliverable; if a document ever turns up where the pitch costs a page inside a fixed-height
@@ -258,7 +260,7 @@ none, the target still holds an empty paragraph when the source's content arrive
 **Word**: shows the linked footer, unchanged.
 
 **This tree**: shows the linked footer, unchanged. `DocxReader.FurnitureCarry` carries the slot
-across the sections and nothing is appended. **Not switched** — see below.
+across the sections and nothing is appended. **Never implemented** — see below.
 
 **Measured on `words/pagination-002/docx/docs-quality-MA.IMS.00001-Integrated-Management-System-manual.docx`**,
 whose sections 4 and 5 state a `w:headerReference` and no `w:footerReference`. Footer text bottom
@@ -283,8 +285,8 @@ links its footer or header to the previous, and a running foot tall enough for a
 
 **What it costs: 0.29 of ink and no gate row.** Supplying the paragraph in the file and re-rendering
 this tree against the unmodified reference takes the document from 10.22 unsigned ink to 9.93 and
-from two major pages to one — while opening a two-page drift at page 34. That is why it is **not
-switched**: the rule is a defect in the reference's importer rather than a reading of the file, the
+from two major pages to one — while opening a two-page drift at page 34. That is why it was **never
+implemented**: the rule is a defect in the reference's importer rather than a reading of the file, the
 whole of what it buys is three short lines moving 11.5 pt on 37 pages, and reproducing it would
 cost a pagination it currently gets right. The measurement is the deliverable.
 
@@ -307,7 +309,7 @@ does the same for DOCX and RTF (`dmapper/PropertyMap.cxx`:1746-1801).
 **This tree**: the same as Word. `ContinuousPageDescriptors` models the *drop* — a descriptor that
 can be hung nowhere is lost, which is Word's behaviour too, since a section that never gets a page
 of its own never gets its page setup either — but not the *deferral*, and the two are different
-claims. **Not switched**, for the same reason the entry below this one is not: deferring a
+claims. **Never implemented**, for the same reason the entry above this one is not: deferring a
 descriptor to a later page is an importer's workaround for a model limitation this tree does not
 have, and reproducing it means drawing the wrong running head on a page on purpose.
 
@@ -340,12 +342,12 @@ that test reads — so the property has never reached a paragraph. Fixed upstrea
 **Word**: applies it.
 
 **This tree**: applies it, as it always has — the table style is one of the layers
-`WordParagraphFormats` resolves `w:contextualSpacing` through. `XRAY_OFFICE_LIBREOFFICE_QUIRKS=1`
-drops the table-style layer for this property alone. Measured on an authored DOCX — three `Body`
-paragraphs with `w:after="240"` in one cell of a table whose style states only
+`WordParagraphFormats` resolves `w:contextualSpacing` through. Measured on an authored DOCX — three
+`Body` paragraphs with `w:after="240"` in one cell of a table whose style states only
 `<w:pPr><w:contextualSpacing/></w:pPr>`: 26.8.1.1 sets the three 12 pt apart and the paragraphs after
-the table 24 pt lower than this tree (`probes/words-tblctx-r268/`).
-With the switch on, this tree draws that probe exactly where 26.8.1.1 does. `TableStyleContextualSpacingTests` pins the default.
+the table 24 pt lower than this tree (`probes/words-tblctx-r268/`). With the table-style layer dropped
+for this property, as the since-removed switch did, this tree drew that probe exactly where 26.8.1.1
+does. `TableStyleContextualSpacingTests` pins Word's answer.
 
 **Reach**: none measured — 0 of the 15 DOCX in `test_documents`, and the sample corpus was not
 available to the round that wrote this.
@@ -355,13 +357,13 @@ available to the round that wrote this.
 ## Still LibreOffice's reading, and why
 
 These are places where this tree recomputes a field that Word would leave at its cache, and they
-are **not** switched: each computes something the file cannot state correctly, so the cache is
+are deliberately **not** divergences: each computes something the file cannot state correctly, so the cache is
 stale by construction rather than merely unupdated.
 
 - **`PAGE`, `NUMPAGES`, `SECTIONPAGES`.** Pagination decides them and Word maintains them too.
 - **`FILENAME`, `TITLE`.** The cache is a statement about a file that no longer exists; the
   measurement that put them in is in `ConstantFields`' own remarks (351 of one document's 363-word
-  gap). Word would show the cache here, so this is the closest of the three to being switched —
+  gap). Word would show the cache here, so this is the closest of the three to joining the list above —
   and it is left because the value it draws is right about the document in hand where the cache is
   right about a previous one.
 - **`STYLEREF`.** Page-dependent by nature, like `PAGE`: it quotes the heading in force, which
@@ -371,7 +373,7 @@ stale by construction rather than merely unupdated.
 **Not yet decided: the RTF bookmark rotation (round 88).** `RtfBookmarkRotation` reproduces a
 *writerfilter bug* — RTF sends a bookmark half's name before its id and the mapper is written for
 the opposite order, so every name after the first lands one bookmark early. Word has no such bug.
-Under this file's rule it should be off; what stops that being a one-line change is that the
+Under this file's rule it should go; what stops that being a one-line change is that the
 corpus holds no `.rtf` at all, so the only RTF evidence is `/home/user/corpus-odf`'s 338 files —
 **written by LibreOffice itself**, where reproducing LibreOffice's own read of its own output is
-not obviously wrong. Measure the reach on real Word-written RTF before switching it.
+not obviously wrong. Measure the reach on real Word-written RTF before removing it.

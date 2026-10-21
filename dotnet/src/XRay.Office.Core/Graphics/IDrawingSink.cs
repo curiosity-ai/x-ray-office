@@ -125,6 +125,38 @@ public interface IDrawingSink
     void DrawImage(RasterImage image, DocRect destination, double opacity = 1.0);
 
     /// <summary>
+    /// Renders drawing commands offscreen into a bitmap of its own and hands the pixels back, or
+    /// returns null when this sink has no rasteriser.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Not a drawing command: nothing reaches the page. It exists for the effects LibreOffice
+    /// computes from a shape's <em>pixels</em> — a soft edge keeps its content's colours under a
+    /// processed copy of its alpha, a glow is grown from the alpha of text or of a picture — at a
+    /// resolution the document fixes rather than the device: the reference renders the content
+    /// into a grid of hundredths of a millimetre capped at 250 000 pixels whatever it is exported
+    /// to. So the layout decides the grid and does the arithmetic, which has to be bit-exact and
+    /// the same for every backend, and the backend only lends the rasteriser it already has. See
+    /// <see cref="ShapeEffects"/>.
+    /// </para>
+    /// <para>
+    /// The commands <paramref name="draw"/> issues are in the same coordinates as the page's, and
+    /// <paramref name="area"/> is the part of that space the bitmap covers, its edges the
+    /// bitmap's edges; the current transform and clip of this sink do not apply. The bitmap starts
+    /// fully transparent and comes back as straight RGBA.
+    /// </para>
+    /// <para>
+    /// Defaulted to null, so a sink that records rather than renders — a test's, a metafile's
+    /// display list — needs nothing, and an effect that needs pixels is simply not drawn there.
+    /// </para>
+    /// </remarks>
+    /// <param name="width">The bitmap's width in pixels.</param>
+    /// <param name="height">The bitmap's height in pixels.</param>
+    /// <param name="area">The rectangle of drawing space the bitmap covers.</param>
+    /// <param name="draw">Issues the commands to render, into the sink it is given.</param>
+    RasterImage? Rasterise(int width, int height, DocRect area, Action<IDrawingSink> draw) => null;
+
+    /// <summary>
     /// Begins a transparency group: subsequent drawing is composited offscreen and
     /// then blended in one step at the given opacity.
     /// </summary>

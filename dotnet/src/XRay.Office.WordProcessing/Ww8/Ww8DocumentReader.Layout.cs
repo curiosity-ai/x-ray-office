@@ -139,6 +139,12 @@ public sealed partial class Ww8DocumentReader
         /// <summary>The paragraph's outline level, 1 and up, or 0 for body text.</summary>
         public int OutlineLevel { get; init; }
 
+        /// <summary>
+        /// True when the paragraph does not snap to its page's text grid: <c>sprmPFUsePgsuSettings</c> off,
+        /// Writer's <c>RES_PARATR_SNAPTOGRID</c> false.
+        /// </summary>
+        public bool IgnoresPageGrid { get; init; }
+
         /// <inheritdoc cref="HasAutoSpaceBefore"/>
         public bool HasAutoSpaceAfter { get; init; }
 
@@ -221,6 +227,21 @@ public sealed partial class Ww8DocumentReader
         /// moved back out of the fly (<c>sw/source/filter/ww8/ww8par6.cxx:2674</c>).
         /// </remarks>
         public IReadOnlyList<Ww8LayoutTextFrame>? TextFrames { get; init; }
+
+        /// <summary>
+        /// The drop cap this paragraph's own <c>sprmPDcs</c> asks for, or null when it asks for none.
+        /// </summary>
+        /// <remarks>
+        /// Read only from the paragraph's own PAPX, as <c>SwWW8ImplReader::IsDropCap</c> reads it
+        /// (<c>sw/source/filter/ww8/ww8par6.cxx</c>:2446-2472), and only meaningful on a paragraph that is
+        /// also a text frame: <c>StartApo</c> is the one caller (:2489-2494).
+        /// </remarks>
+        public Ww8DropCap? DropCap { get; init; }
+
+        /// <summary>
+        /// The drop-cap paragraph whose letters drop into this one, or null.
+        /// </summary>
+        public Ww8DropLetters? DropLetters { get; init; }
 
         /// <summary>
         /// The rules round the paragraph, or null when nothing in its style chain states one.
@@ -581,6 +602,39 @@ public sealed partial class Ww8DocumentReader
             IsInTable: false);
 
         return [new Ww8LayoutBlock(paragraph)];
+    }
+
+    /// <summary>
+    /// A paragraph's automatic hyphenation, or null when it is not hyphenated.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A <c>sprmPFNoAutoHyph</c> anywhere in the paragraph's chain decides; otherwise the <c>Dop</c>'s
+    /// <c>fAutoHyphen</c>, which the import puts on the Standard style every other style descends from. The
+    /// item either one builds has minima of two and two and no limit on consecutive lines, and — unlike
+    /// writerfilter's — no hot zone, no capitals rule and no hyphenation-keep: the WW8 import sets none of
+    /// them (<c>ww8par2.cxx</c>:4557-4571, <c>ww8par6.cxx</c>:5378-5398).
+    /// </para>
+    /// <para>
+    /// The minimum word length differs by source. The Standard style's item is built new, so its length is
+    /// the item's own nought (<c>SvxHyphenZoneItem</c>'s constructor, <c>editeng/source/items/paraitem.cxx</c>:
+    /// 616-637); a sprm copies the item already in force and keeps its length, which for a style chain
+    /// stating nothing is the pool default <see cref="HyphenationRules.Default"/> describes. That second
+    /// half is read from source and not measured: no probe here separates a four- from a five-letter word.
+    /// </para>
+    /// <para>
+    /// A style that is not derived from Standard and states no sprm takes the <c>Dop</c>'s answer here,
+    /// where Writer would leave it unhyphenated; no WW8 file this reader has met carries one.
+    /// </para>
+    /// </remarks>
+    private HyphenationRules? HyphenationOf(Ww8LayoutFormat layout)
+    {
+        if (layout.Hyphenates is { } stated)
+            return stated ? HyphenationRules.Default with { MaxConsecutive = 0 } : null;
+
+        return DocumentProperties.AutoHyphenation
+            ? HyphenationRules.Default with { MinWordLength = 0, MaxConsecutive = 0 }
+            : null;
     }
 
     /// <summary>The stylesheet index of the default paragraph style, which WW8 fixes at nought.</summary>
@@ -1399,6 +1453,7 @@ public sealed partial class Ww8DocumentReader
             TabsRelativeToIndent = false,
             ClampsTabsAtLineEdge = true,
             SpillsTrailingNoBreakSpace = true,
+            Hyphenation = HyphenationOf(layout),
         };
 
         // The level is looked up whether or not it draws a label, because a continuation paragraph of a
@@ -1439,6 +1494,10 @@ public sealed partial class Ww8DocumentReader
             AutoKerning = character.AutoKerning ?? false,
             Tracking = TrackingOf(character),
             WidthPerCent = ScaleOf(character),
+
+            // `Read_UsePgsuSettings` (`ww8par6.cxx`:5420-5431): a stated sprm in a table turns the grid off
+            // whatever it says; unstated, `RES_PARATR_SNAPTOGRID`'s default is on.
+            IgnoresPageGrid = layout.UsesPageGrid is { } usesGrid && (!usesGrid || paragraph.IsInTable),
             Anchors = AnchorsOf(positions, text.Length, markPosition),
             OutlineLevel = paragraph.HeadingLevel ?? 0,
             Borders = layout.ToParagraphBorders(),
@@ -1451,8 +1510,42 @@ public sealed partial class Ww8DocumentReader
             // every cell paragraph resolves its position and `LayoutTableAssembler` reads only the ones
             // that stand at a row's head; see `Ww8LayoutTable.TextFrame`.
             TextFrame = ResolveTextFrame(markPosition),
+            DropCap = ResolveDropCap(markPosition),
         };
     }
+
+    /// <summary>
+    /// What a paragraph's own <c>sprmPDcs</c> and <c>sprmPDxaFromText</c> say about a drop cap.
+    /// </summary>
+    /// <remarks>
+    /// <c>SwWW8ImplReader::IsDropCap</c> (<c>ww8par6.cxx</c>:2446-2472) tests the low three bits of the
+    /// DCS for a drop at all; the line count is the first byte shifted right by three and the distance
+    /// the paragraph's own horizontal distance from text (<c>ww8par.cxx</c>:4014-4027). Word has no
+    /// whole-word drop, so the letters are exactly the drop-cap paragraph's text (:3995-3997).
+    /// </remarks>
+    /// <param name="position">The paragraph mark's position.</param>
+    private Ww8DropCap? ResolveDropCap(int position)
+    {
+        int byteOffset = _pieces.FileOffsetOf(position);
+        (_, ReadOnlyMemory<byte> direct) =
+            Ww8FormattingTable.SplitParagraphProperties(_paragraphProperties.Find(byteOffset));
+
+        int? descriptor = null;
+        int distance = 0;
+
+        foreach (Ww8Sprm sprm in Ww8SprmReader.Read(direct))
+        {
+            if (sprm.Identifier == DropCapSprm) descriptor = (ushort)sprm.SignedWord;
+            else if (sprm.Identifier == TextFrameSprms.FromTextX) distance = (ushort)sprm.SignedWord;
+        }
+
+        return descriptor is { } dcs && (dcs & 7) != 0
+            ? new Ww8DropCap((dcs & 0xFF) >> 3, distance)
+            : null;
+    }
+
+    /// <summary><c>sprmPDcs</c>, the drop cap specifier.</summary>
+    private const ushort DropCapSprm = 0x442C;
 
     /// <summary>
     /// The <c>ixchFollow</c> a paragraph with no level of its own is given: nothing at all.
@@ -1620,7 +1713,7 @@ public sealed partial class Ww8DocumentReader
                 format.IsItalic == true,
                 LanguageOf(format),
                 format.Colour,
-                format.Escapement ?? Layout.Escapement.None,
+                EscapementOf(format),
                 format.CaseMap,
                 format.Highlight,
                 format.Underline ?? TextUnderline.None,
@@ -1709,6 +1802,27 @@ public sealed partial class Ww8DocumentReader
             ? Length.FromPoints(halves / 2.0)
             : Length.FromPoints(10);
 
+    /// <summary>The escapement a character format states, from either of WW8's two spellings.</summary>
+    /// <remarks>
+    /// <c>sprmCHpsPos</c> becomes a percentage of the run's own size, truncated, at full size:
+    /// <c>SwWW8ImplReader::Read_SubSuperProp</c> (<c>ww8par6.cxx</c>:3551-3586) divides the offset in
+    /// hundredths of a twip by the font height in twips and builds <c>SvxEscapementItem(nPos2, 100)</c>,
+    /// clamped to <c>MAX_ESC_POS</c>. The percentage is then of the face's height, like any escapement.
+    /// </remarks>
+    private static Layout.Escapement EscapementOf(Ww8LayoutFormat format)
+    {
+        if (format.PositionHalfPoints is not { } halves) return format.Escapement ?? Layout.Escapement.None;
+
+        long height = SizeOf(format).Twips;
+        if (height == 0) height = 240;
+
+        int percent = (int)Math.Clamp(halves * 1000L / height, -MaxEscapement, MaxEscapement);
+        return percent == 0 ? Layout.Escapement.None : new Layout.Escapement(percent, 100);
+    }
+
+    /// <summary><c>MAX_ESC_POS</c>, <c>include/editeng/escapementitem.hxx</c>:31.</summary>
+    private const int MaxEscapement = 13999;
+
     private static string? LanguageOf(Ww8LayoutFormat format)
         => format.LanguageId is { } id and > 0 and <= ushort.MaxValue
             ? WindowsLanguages.TagOf((ushort)id)
@@ -1782,6 +1896,23 @@ public sealed partial class Ww8DocumentReader
             {
                 inside.Add(blocks[index]);
                 index++;
+            }
+
+            // A drop-cap paragraph is no frame: `StartApo` returns before it builds one and the paragraph
+            // is merged into the next (`ww8par6.cxx`:2489-2494, `ww8par.cxx`:3977-4008), whose drop its
+            // letters become. Only a lone one, followed by a paragraph to drop into; anything else is
+            // left a frame, which is what this reader did before drop caps were read.
+            if (inside is [{ Paragraph: { DropCap: { } drop } letters }]
+                && index < blocks.Count
+                && blocks[index].Paragraph is { } host
+                && FramePositionOf(blocks[index]).IsEmpty)
+            {
+                blocks[index] = new Ww8LayoutBlock(host with
+                {
+                    DropLetters = new Ww8DropLetters(letters, drop.Lines, drop.Distance),
+                });
+                index--;
+                continue;
             }
 
             index--;
@@ -2830,9 +2961,14 @@ public sealed partial class Ww8DocumentReader
                     };
                     break;
 
+                case LayoutSprms.Position:
+                    format = format with { PositionHalfPoints = sprm.SignedWord, Escapement = null };
+                    break;
+
                 case LayoutSprms.VerticalPosition:
                     format = format with
                     {
+                        PositionHalfPoints = null,
                         Escapement = sprm.Byte switch
                         {
                             1 => Layout.Escapement.Superscript,
@@ -2875,6 +3011,12 @@ public sealed partial class Ww8DocumentReader
                     break;
                 case LayoutSprms.PageBreakBefore:
                     format = format with { StartsNewPage = sprm.Byte != 0 };
+                    break;
+                case LayoutSprms.UsesPageGrid:
+                    format = format with { UsesPageGrid = sprm.Byte != 0 };
+                    break;
+                case LayoutSprms.NoAutoHyphenation:
+                    format = format with { Hyphenates = sprm.Byte == 0 };
                     break;
                 case LayoutSprms.WidowControl:
                     format = format with { HasWidowControl = sprm.Byte != 0 };
@@ -3089,6 +3231,8 @@ public sealed partial class Ww8DocumentReader
         internal const ushort SpaceBeforeAuto = 0x245B;
         internal const ushort SpaceAfterAuto = 0x245C;
         internal const ushort WidowControl = 0x2431;
+        internal const ushort NoAutoHyphenation = 0x242A;
+        internal const ushort UsesPageGrid = 0x2447;
         internal const ushort RightIndent = 0x845D;
         internal const ushort LeftIndent = 0x845E;
         internal const ushort FirstLineIndent = 0x8460;
@@ -3243,9 +3387,12 @@ public sealed partial class Ww8DocumentReader
         /// <remarks>
         /// The one WW8 spells as a *kind* rather than a distance, which is why it can be read as an
         /// automatic escapement: the shift and the smaller size both come with it. Its companion
-        /// <c>sprmCHpsPos</c> (0x4845) states a half-point offset outright and is not read yet.
+        /// <c>sprmCHpsPos</c> is <see cref="Position"/>.
         /// </remarks>
         internal const ushort VerticalPosition = 0x2A48;
+
+        /// <summary><c>sprmCHpsPos</c>: a half-point offset off the baseline, positive upwards.</summary>
+        internal const ushort Position = 0x4845;
         internal const ushort Colour = 0x6870;
         internal const ushort TabStops = 0xC60D;
     }

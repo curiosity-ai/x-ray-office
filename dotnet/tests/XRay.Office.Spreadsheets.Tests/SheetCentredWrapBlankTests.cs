@@ -53,6 +53,15 @@ namespace XRay.Office.Spreadsheets.Tests;
 /// 194.80 and 200.63. Before the break rule changed we drew 52 glyphs and then 8, so the line
 /// structure disagreed with the reference's even where the placement had been corrected to agree.
 /// </para>
+/// <para>
+/// <strong>Re-measured against the 26.8 branch daily on 2026-10-21, and the placement moved.</strong>
+/// The line structure is the same — 29, 23 and 8 glyphs — but the daily draws them at
+/// <b>199.247</b>, <b>226.743</b> and 200.636: it centres a wrapped line on its width without its
+/// trailing blanks (<c>tdf#168135</c>, <c>impedit3.cxx</c>:1646-1682, in 26.8.1.1 too and not in
+/// 26.2.4.2), so the first line is centred on <c>WESTERLY</c> alone and the line of blanks on
+/// nothing. We now draw 199.249, 226.772 and 200.635. The test that asserted the left margin
+/// asserts the daily's place instead; <c>SheetTextLayout.AlignedWidth</c> has the measurements.
+/// </para>
 /// </remarks>
 public sealed class SheetCentredWrapBlankTests
 {
@@ -75,9 +84,9 @@ public sealed class SheetCentredWrapBlankTests
         first.Origin.X.Points.ShouldBeGreaterThanOrEqualTo(
             CellLeftPoints, "a centred line never begins left of the cell it is in");
 
-        // The reference places it at 171.468 pt, which is its left margin: its line fills the
-        // width, so (nMaxLineWidth - nCenterWidth) / 2 is nought. Ours is now the same line.
-        first.Origin.X.Points.ShouldBe(171.07, 0.05, "at the cell's left margin, as the reference");
+        // The daily places it at 199.247 pt: centred on the word, its trailing blanks left out of
+        // the centring width (tdf#168135). 26.2.4.2 put it at its left margin, 171.468 pt.
+        first.Origin.X.Points.ShouldBe(199.25, 0.05, "centred on its visible text, as the reference");
     }
 
     [Fact]
@@ -94,6 +103,10 @@ public sealed class SheetCentredWrapBlankTests
         last.ShouldBe(first + 2, "a line of blanks stands between the two words");
         runs[first + 1].Text.ShouldAllBe(character => character == ' ', "and holds nothing else");
         runs[first + 1].Text.Length.ShouldBe(23, "as many blanks as the reference draws there");
+
+        // A line of nothing but blanks has no visible width, so it is centred on the cell's middle:
+        // the daily draws it at 226.743 pt.
+        runs[first + 1].Origin.X.Points.ShouldBe(226.74, 0.05, "centred on nothing");
     }
 
     [Fact]

@@ -994,21 +994,41 @@ internal sealed partial class PptxSlideLayout
             Shadow = Shadow(properties, inherited, style, theme),
             Glow = Glow(shape, properties, inherited, style, theme),
             SoftEdge = SoftEdge(shape, properties, inherited, style, theme),
+            TextGlow = TextGlow(shape, theme),
         };
     }
 
     /// <summary>
-    /// Whether 26.8.1.1 applies a shape's glow and soft edge twice: true for a custom shape.
+    /// Whether 26.8 applies a shape's glow and soft edge twice: for a rectangle custom shape only.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Every <c>p:sp</c> that is not a presentation object is a
     /// <c>com.sun.star.drawing.CustomShape</c>, and a custom shape's primitive wraps the
-    /// primitives of the geometry object its engine rendered, which carries the same effect
-    /// items — see <see cref="SlideGlow.Twice"/>. A picture and a presentation object's text
-    /// frame have no such inner object.
+    /// primitives of the object its engine renders it from — see <see cref="SlideGlow.Twice"/>.
+    /// That object carries the same effect items, but only one kind of it draws them:
+    /// <c>EnhancedCustomShape2d::CreateObject</c> builds an <c>SdrRectObj</c> for
+    /// <c>mso_sptRectangle</c> — <c>ooxml-rect</c>, ODF's <c>rectangle</c> — and an
+    /// <c>SdrPathObj</c> for every other geometry (<c>EnhancedCustomShape2d.cxx</c>:3031-3043), and
+    /// of the two only <c>SdrRectanglePrimitive2D</c> adds a glow or a soft edge
+    /// (<c>sdrrectangleprimitive2d.cxx</c>:96-104; <c>sdrpathprimitive2d.cxx</c> adds a shadow and
+    /// nothing else). Measured: a 20 pt soft edge on an ellipse is eroded once, its mask 28.8
+    /// levels from ours applied twice and 0.0 applied once; on a rectangle it is eroded twice.
+    /// </para>
+    /// <para>
+    /// A shape stating no geometry at all is imported as a rectangle.
+    /// </para>
     /// </remarks>
     private bool EffectsApplyTwice(XElement shape)
-        => shape.Name.LocalName == "sp" && !(_styles?.IsPresentationTextObject(shape) ?? false);
+    {
+        if (shape.Name.LocalName != "sp" || (_styles?.IsPresentationTextObject(shape) ?? false)) return false;
+
+        XElement? properties = Ppt.Child(shape, "spPr");
+        if (Drawing.Child(properties, "custGeom") is not null) return false;
+
+        return Drawing.Child(properties, "prstGeom") is not { } preset
+               || Drawing.Attribute(preset, "prst") is null or "rect";
+    }
 
     /// <summary>
     /// The shape's glow: the first of its own effect list, its placeholder's and the theme's
@@ -1056,6 +1076,47 @@ internal sealed partial class PptxSlideLayout
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// The glow of the shape's text: the first paragraph whose own run properties state one, or
+    /// else the first run that does, as <c>Shape::createAndInsert</c> looks for it
+    /// (<c>oox/source/drawingml/shape.cxx</c>:2331-2372) — one glow for the whole body.
+    /// </summary>
+    private static SlideTextGlow? TextGlow(XElement shape, SlideTheme theme)
+    {
+        XElement? body = Ppt.Child(shape, "txBody");
+        if (body is null || DrawingTextBody.IsEmpty(body)) return null;
+
+        foreach (XElement paragraph in Drawing.Children(body, "p"))
+        {
+            if (GlowOf(Drawing.Child(Drawing.Child(paragraph, "pPr"), "defRPr")) is { } own) return Read(own);
+
+            foreach (XElement run in paragraph.Elements())
+            {
+                if (run.Name.LocalName is not ("r" or "fld" or "br")) continue;
+                if (GlowOf(Drawing.Child(run, "rPr")) is { } glow) return Read(glow);
+            }
+        }
+
+        return null;
+
+        static XElement? GlowOf(XElement? properties) => Drawing.Child(Drawing.Child(properties, "effectLst"), "glow");
+
+        SlideTextGlow? Read(XElement glow)
+        {
+            if (Drawing.Number(glow, "rad") is not { } radius || radius <= 0) return null;
+
+            Colour colour = Colour.Black;
+            foreach (XElement child in glow.Elements())
+            {
+                if (DrawingColour.Read(child)?.Resolve(theme.Colours) is not { } resolved) continue;
+                colour = resolved;
+                break;
+            }
+
+            return new SlideTextGlow(colour, Length.FromEmu(radius), Length.FromPoints(18));
+        }
     }
 
     private static XElement?[] EffectSources(

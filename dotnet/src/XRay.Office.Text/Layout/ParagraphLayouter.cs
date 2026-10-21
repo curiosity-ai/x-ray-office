@@ -791,6 +791,10 @@ public sealed class ParagraphLayouter
         bool justifiable = alignment is TextAlignment.Justify or TextAlignment.Distribute;
         if (!justifiable) return Length.Zero;
 
+        // On a grid that snaps to characters no portion has a blank to stretch: `GetSpaceCnt` and
+        // `CalcSpacing` answer nought (sw/source/core/text/portxt.cxx:1191-1196, 1231-1236).
+        if (format.TextGrid?.Characters is { SnapsToCharacters: true }) return Length.Zero;
+
         Length slack = available - line.Width;
 
         if (slack > Length.Zero)

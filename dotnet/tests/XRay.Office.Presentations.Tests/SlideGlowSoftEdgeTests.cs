@@ -29,24 +29,16 @@ namespace XRay.Office.Presentations.Tests;
 /// </remarks>
 public class SlideGlowSoftEdgeTests
 {
-    private static (IReadOnlyList<PlacedShape> Shapes, DocSize Size) Slide()
-    {
-        using IDocument read = new PresentationReader().Read(
-            DocumentSource.FromFile(Corpus.Require("slide-glow-soft-edge.pptx")));
-        LaidOutSlide slide = ((SlidePages)((IPaginatedDocument)read).Layout()).Slides[0];
-        return (slide.Shapes, slide.Size);
-    }
-
     [Fact]
     public void ACustomShapesGlowIsTwoBitmapsTheSizesTheReferenceDraws()
     {
-        (IReadOnlyList<PlacedShape> shapes, DocSize size) = Slide();
+        (IReadOnlyList<PlacedShape> shapes, DocSize size) = Slide("slide-glow-soft-edge.pptx");
         PlacedShape shape = shapes.First(s => s.Glow is { Radius.Emu: 228600 });
 
         shape.Glow!.Value.Twice.ShouldBeTrue();
         shape.Glow!.Value.Colour.A.ShouldBe((byte)153);
 
-        IReadOnlyList<SlideEffects.Layer> layers = SlideEffects.Glow(shape, shape.Glow!.Value, size);
+        IReadOnlyList<EffectLayer> layers = SlideEffects.Glow(shape, shape.Glow!.Value, size);
         layers.Count.ShouldBe(2);
 
         (layers[0].Image.Width, layers[0].Image.Height).ShouldBe((587, 426));
@@ -60,7 +52,7 @@ public class SlideGlowSoftEdgeTests
     [Fact]
     public void TheInnerGlowsMaskIsTheReferencesOwn()
     {
-        (IReadOnlyList<PlacedShape> shapes, DocSize size) = Slide();
+        (IReadOnlyList<PlacedShape> shapes, DocSize size) = Slide("slide-glow-soft-edge.pptx");
         PlacedShape shape = shapes.First(s => s.Glow is { Radius.Emu: 228600 });
 
         RasterImage inner = SlideEffects.Glow(shape, shape.Glow!.Value, size)[1].Image;
@@ -75,10 +67,10 @@ public class SlideGlowSoftEdgeTests
     [Fact]
     public void ASoftEdgeReplacesTheFillWithOneFadedBitmap()
     {
-        (IReadOnlyList<PlacedShape> shapes, DocSize size) = Slide();
+        (IReadOnlyList<PlacedShape> shapes, DocSize size) = Slide("slide-glow-soft-edge.pptx");
         PlacedShape shape = shapes.Single(s => s.SoftEdge is not null);
 
-        SlideEffects.Layer? softened = SlideEffects.SoftEdge(shape, shape.SoftEdge!.Value, size);
+        EffectLayer? softened = SlideEffects.SoftEdge(shape, shape.SoftEdge!.Value, size);
         softened.ShouldNotBeNull();
 
         RasterImage image = softened.Value.Image;
@@ -87,13 +79,13 @@ public class SlideGlowSoftEdgeTests
         Alpha(image, 322, 193).ShouldBe((byte)255);
         Alpha(image, 0, 0).ShouldBe((byte)0);
 
-        // The reference's row 193 at x = 0, 20 … 120 is 0 0 2 15 51 113 178: eroded twice by 20 pt
-        // and blurred. Ours is within a few levels of it along the whole ramp.
+        // The reference's row 193 at x = 0, 20 … 120: eroded twice by 20 pt and blurred. It is
+        // the reference's to the level now that the radius is the model's 706 hundredths of a
+        // millimetre and the discretes are the PDF device's 720 dpi; before, the ramp sat a pixel
+        // out, a mean difference of 5.1 levels.
         int[] reference = [0, 0, 2, 15, 51, 113, 178];
-        for (int i = 0; i < reference.Length; i++)
-        {
-            ((int)Alpha(image, i * 20, 193)).ShouldBeInRange(reference[i] - 25, reference[i] + 25);
-        }
+        int[] ours = [.. Enumerable.Range(0, reference.Length).Select(i => (int)Alpha(image, i * 20, 193))];
+        ours.ShouldBe(reference);
 
         // And the text stays text.
         shape.Text.ShouldNotBeNull();
@@ -102,13 +94,108 @@ public class SlideGlowSoftEdgeTests
     [Fact]
     public void AGlowOfAThemeColourIsOpaqueAtItsCore()
     {
-        (IReadOnlyList<PlacedShape> shapes, DocSize size) = Slide();
+        (IReadOnlyList<PlacedShape> shapes, DocSize size) = Slide("slide-glow-soft-edge.pptx");
         PlacedShape shape = shapes.First(s => s.Glow is { Radius.Emu: 101600 });
 
-        IReadOnlyList<SlideEffects.Layer> layers = SlideEffects.Glow(shape, shape.Glow!.Value, size);
+        IReadOnlyList<EffectLayer> layers = SlideEffects.Glow(shape, shape.Glow!.Value, size);
         layers.Count.ShouldBe(2);
         (layers[0].Image.Width, layers[0].Image.Height).ShouldBe((612, 409));
         Alpha(layers[1].Image, layers[1].Image.Width / 2, layers[1].Image.Height / 2).ShouldBe((byte)255);
+    }
+
+    [Fact]
+    public void OnlyARectangleTakesItsEffectsTwice()
+    {
+        // `EnhancedCustomShape2d::CreateObject` renders a rectangle from an `SdrRectObj`, which
+        // draws the effects again, and every other geometry from an `SdrPathObj`, which does not.
+        // 26.8 draws one bitmap for an 18 pt glow on an ellipse and on a rounded rectangle, and
+        // two on a rectangle.
+        (IReadOnlyList<PlacedShape> shapes, DocSize size) = Slide("slide-glow-ellipse.pptx");
+        List<PlacedShape> glowing = [.. shapes.Where(s => s.Glow is not null)];
+        glowing.Count.ShouldBe(3);
+
+        glowing.Select(s => s.Glow!.Value.Twice).ShouldBe([false, false, true]);
+
+        IReadOnlyList<EffectLayer> ellipse = SlideEffects.Glow(glowing[0], glowing[0].Glow!.Value, size);
+        ellipse.Count.ShouldBe(1);
+        (ellipse[0].Image.Width, ellipse[0].Image.Height).ShouldBe((609, 411));
+    }
+
+    [Fact]
+    public void AGlowsShadowIsTheGlowRecoloured()
+    {
+        // `createEmbeddedShadowPrimitive` wraps the glow with the rest (tdf#132199): 26.8 draws both
+        // glow bitmaps again, offset by the 20 pt shadow, in its colour.
+        using IDocument read = new PresentationReader().Read(
+            DocumentSource.FromFile(Corpus.Require("slide-glow-shadow.pptx")));
+        RecordingDrawingSink sink = new();
+        SlideDrawing.Draw(((SlidePages)((IPaginatedDocument)read).Layout()).Slides[0], sink);
+
+        List<DrawnPicture> images = [.. sink.Pages[0].Pictures
+            .Where(c => c.Image.Width == 587 && c.Image.Height == 426)];
+        images.Count.ShouldBe(2);
+
+        // The shadow's copy is first and black; it goes to the same rectangle, the 14.14 pt offset
+        // being the shadow's transform.
+        images[0].Destination.ShouldBe(images[1].Destination);
+        images[0].Image.Pixels.Span[0..3].ToArray().ShouldBe([(byte)0, (byte)0, (byte)0]);
+        images[1].Image.Pixels.Span[0..3].ToArray().ShouldBe([(byte)255, (byte)0, (byte)0]);
+    }
+
+    [Fact]
+    public void TextGlowIsReadOnceForTheWholeBody()
+    {
+        (IReadOnlyList<PlacedShape> shapes, _) = Slide("slide-text-glow.pptx");
+
+        // A 10 pt red glow at 60% on a 40 pt run, and a 5 pt green one on a 20 pt run; the shape's
+        // own 18 pt counts with the runs when the radius is scaled.
+        SlideTextGlow first = shapes[0].TextGlow!.Value;
+        first.Radius.Emu.ShouldBe(127000);
+        first.Colour.ShouldBe(new Colour(255, 0, 0, 153));
+        first.ShapeFontSize.Points.ShouldBe(18, 0.01);
+
+        shapes[1].TextGlow!.Value.Colour.ShouldBe(new Colour(0, 0xB0, 0x50));
+    }
+
+    [Fact]
+    public void AnOdpStatesTheSameEffectsInItsGraphicStyles()
+    {
+        // LibreOffice's own conversion of slide-glow-soft-edge.pptx, which it renders image for
+        // image as it renders the original.
+        (IReadOnlyList<PlacedShape> shapes, DocSize size) = Slide("slide-glow-soft-edge.odp");
+
+        PlacedShape glowing = shapes.First(s => s.Glow is { Radius.Emu: > 200000 });
+        glowing.Glow!.Value.Twice.ShouldBeTrue();
+        glowing.Glow!.Value.Colour.A.ShouldBe((byte)153);
+
+        IReadOnlyList<EffectLayer> layers = SlideEffects.Glow(glowing, glowing.Glow!.Value, size);
+        (layers[0].Image.Width, layers[0].Image.Height).ShouldBe((587, 426));
+        (layers[1].Image.Width, layers[1].Image.Height).ShouldBe((609, 411));
+
+        PlacedShape soft = shapes.Single(s => s.SoftEdge is not null);
+        EffectLayer softened = SlideEffects.SoftEdge(soft, soft.SoftEdge!.Value, size)!.Value;
+        (softened.Image.Width, softened.Image.Height).ShouldBe((645, 387));
+        int[] ramp = [.. Enumerable.Range(0, 7).Select(i => (int)Alpha(softened.Image, i * 20, 193))];
+        ramp.ShouldBe([0, 0, 2, 15, 51, 113, 178]);
+    }
+
+    [Fact]
+    public void WithoutARasteriserAPictureIsNotSoftened()
+    {
+        // A picture's pixels need a codec, which only a backend has; a sink that cannot render
+        // them leaves the picture drawn as it is rather than inventing its colours.
+        (IReadOnlyList<PlacedShape> shapes, DocSize size) = Slide("slide-soft-edge-content.pptx");
+        PlacedShape picture = shapes.Single(s => s.Picture is not null);
+
+        SlideEffects.SoftEdge(picture, picture.SoftEdge!.Value, size).ShouldBeNull();
+        picture.SoftEdge!.Value.Twice.ShouldBeFalse();
+    }
+
+    private static (IReadOnlyList<PlacedShape> Shapes, DocSize Size) Slide(string name)
+    {
+        using IDocument read = new PresentationReader().Read(DocumentSource.FromFile(Corpus.Require(name)));
+        LaidOutSlide slide = ((SlidePages)((IPaginatedDocument)read).Layout()).Slides[0];
+        return (slide.Shapes, slide.Size);
     }
 
     private static byte Alpha(RasterImage image, int x, int y)

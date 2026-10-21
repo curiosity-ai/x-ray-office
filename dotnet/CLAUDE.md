@@ -679,6 +679,54 @@ own extraction says the document holds.
 
 ## Fidelity: the thing that will bite you
 
+### The reference is the 26.8 daily (since 2026-10-21)
+
+**The target is LibreOffice 26.8.2, represented by the 26.8 branch daily at
+`/opt/libreofficedev26.8/program/soffice`** (`LibreOfficeDev 26.8.3.0.0 9dcd8a837588`, built
+2026-10-20). 26.8.2 is not published — there is only the `libreoffice-26-8-2` release branch, with
+no tag and no binary — and the daily carries every commit on that branch except two crash fixes and
+dependency bumps. It has three rendering-relevant commits 26.8.2 lacks: `4ca9ad3967f` (tdf#173712, a
+PPTX numbered list across a repeated `startAt`), `9688844b510` (tdf#171555, a Writer non-breaking
+hyphen drawn as a plain one; **not to be ported**) and `bcdcfb4094e` (tdf#173993, drawinglayer double
+comparison with an epsilon). `LibreOfficeReference.PinnedPath` names it, so the fidelity suite needs
+no variable. `/opt/libreoffice26.2` (26.2.4.2, what the tree was first calibrated against) and
+`/opt/libreoffice26.8` (26.8.1.1) stay installed **for explaining a difference only**; every
+"26.2.4.2" in the sections below is a statement about the reference of its day.
+
+**The reference runs under a generated font configuration, and without it every installed LibreOffice
+is refused.** This container's `/etc/fonts` prefers Inter for `sans-serif`, `Aptos` and `Helvetica
+Neue` (`conf.d/56-prefer-inter.conf`) and carries `fonts-urw-base35`, so the reference draws faces
+this tree never does — 4 of 23 one-family probes agree under it, 17 of 23 without it.
+`ReferenceFontconfig` (TestKit) writes the machine's `fonts.conf` less those two to
+`$TMPDIR/xray-office-fontconfig-<hash>/fonts.conf` and `LibreOfficeRunner` hands it to every `soffice`
+it starts; the suite went from **472 skipped to 0** with it. Use the same file as `FONTCONFIG_FILE`
+for a hand-run reference render, for the reference only. A caller that sets `FONTCONFIG_FILE` itself
+is left alone. What still differs is this tree's side and is not modelled: it scans the font
+directories itself, so it finds URW's Nimbus Sans for `Century Gothic`, `Verdana` and `Tahoma` (and
+the four `FontResolutionTests` cases in `XRay.Office.Text.Tests` fail on this machine for the same
+reason) — a machine without `fonts-urw-base35` closes that.
+
+**What the retarget moved, measured over the 544 committed fixtures under `tests/corpus`** (each
+rendered by all three under that configuration, words compared by `pdftotext -bbox`): **26.8.1.1 and
+the daily agree on 542** to 0.01 pt, the two others being tdf#171555's hyphen, so a figure measured
+against 26.8.1.1 holds. 26.2.4.2 and the daily agree on 493; of the rest, three causes are known and
+two are taken — a wrapped centred Calc line is centred without its trailing blanks (tdf#168135,
+`SheetTextLayout.AlignedWidth`), a notched `stealth` arrowhead stops its shaft at the notch
+(`a0c13790095`, `LineEnds`), and 26.8 writes one PDF font object per face *and size*, which only an
+instrument reading resource names notices. **Every chart's plot area sits about 1.82 pt further
+right and down in 26.8, and that is now taken** (`ChartLayout.TitleInsetEm`): the 26.8 branch's
+`ShapeFactory::createText` appends a title's character properties to its text portion instead of
+setting them on the shape (`appendTextPortion`), so the "#i109336#" insets it reads back off the
+shape are sized by the chart model's 12 pt pool default (`DrawModelWrapper.cxx:52`) and not by the
+title — `round(423 × 0.30)` = 127 hundredths a side at every size. A 9 pt axis title's shape grows
+by 64 hundredths (1.81 pt) and a 13 pt main title's shrinks by 22, which is the whole shift, right
+edge unmoved because no title borders it. Two neighbours fell out of the same fixtures and are taken
+with it: a centred chart label ending in blanks has its glyphs centred without them
+(`ChartLayout.OnVisibleText`, tdf#168135's EditEngine rule again — half an accounting `_)`, 1.36 pt,
+in all three hosts), and an ODF plot area whose style says `chart:auto-position` or `chart:auto-size`
+has its stated `chart:coordinate-region` ignored (`OdfChartPlot.Region`), which 26.2.4.2's agreement
+with its own written rectangle had hidden. `probes/chartshift-r1/results.md` has the measurements.
+
 ### Look at the rendering. Do not chase it through metrics alone.
 
 **This is the standing instruction and it comes before the rest of this section.** The gate is
@@ -1027,8 +1075,9 @@ Comparing against LibreOffice — use the skills, they encode hard-won details:
 **`render-comparison/SKILL.md` opens with a router — which tool answers which question — and
 four rules that each cost a round.** Read it before writing any comparison of your own.
 
-- **Set `REF_SOFFICE=/opt/libreoffice26.2/program/soffice`.** PATH here is 24.2.7.2 and this
-  tree is calibrated to 26.2.4.2, and they disagree on real documents:
+- **Set `REF_SOFFICE=/opt/libreofficedev26.8/program/soffice`** (the target since 2026-10-21; see
+  *The reference is the 26.8 daily*). PATH here is 24.2.7.2 and this tree was calibrated to
+  26.2.4.2, and the two disagree on real documents:
   `f445896eb008d14c1746fc37d412dc22.docx` is 16 pages under one and 15 under the other, so a
   sweep on PATH banks a `pages` failure for a document that matches. Until round 180 only
   `batch-check.sh` and `verdict.py` honoured the variable; the other eight scripts — the *ink*
@@ -1814,9 +1863,10 @@ commonest cause and not the only one: 16 of the 37 are on documents holding none
 list before working any word-count failure; several agents have each re-derived it the hard way.
 
 **And `TODO.word-parity.md` lists the rows the gate cannot win for the opposite reason: places
-where 26.2.4.2 is wrong about the document, Word is right, and this project follows Word.** Each
-entry is measured, each has an environment variable that switches the reference's behaviour back
-on, and each names the corpus rows it costs. The first of them is a `TOC \t` switch voiding a
+where LibreOffice is wrong about the document, Word is right, and this project follows Word.** Each
+entry is measured and names the corpus rows it costs. There is no way to ask for LibreOffice's
+reading instead: the `XRAY_OFFICE_LIBREOFFICE_QUIRKS` switch that once offered it was removed on
+2026-10-21, with the code behind it. The first of them is a `TOC \t` switch voiding a
 built-in heading's direct paragraph formatting, which is the whole of why
 `24-25_FAA_Holdover_Tables.docx` prints 154 pages against the reference's 155 while sitting within
 51 characters of it. Check that list too before working a words-track row that will not close.

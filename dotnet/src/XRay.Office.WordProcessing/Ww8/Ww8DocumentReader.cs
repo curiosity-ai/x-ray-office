@@ -151,7 +151,7 @@ public sealed partial class Ww8DocumentReader
         get
         {
             List<Model.WritingSection> sections = Ww8SectionTable.Read(
-                SectionDescriptors, _wordDocument);
+                SectionDescriptors, _wordDocument, DefaultStyleFont.Size);
 
             Model.SectionColumnBalance.Apply(sections, DocumentProperties.NoColumnBalance);
 

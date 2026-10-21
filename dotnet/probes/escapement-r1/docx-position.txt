@@ -1,0 +1,39 @@
+== none
+  ref  T[Alpha]@72.10,708.80  T[Base MAR]@72.10,695.00  T[Charlie]@72.10,681.20
+  ours T[Alpha]@72.00,708.80  T[Base MAR]@72.00,695.00  T[Charlie]@72.00,681.20
+== pos6
+  ref  T[Alpha]@72.10,708.80  T[Base MAR]@72.10,691.55  T[MARK]@98.40,695.00  T[tail]@134.40,691.55  T[Charlie]@72.10,677.75
+  ours T[Alpha]@72.00,708.80  T[Base MAR]@72.00,691.55  T[MARK]@98.33,695.00  T[tail]@134.33,691.55  T[Charlie]@72.00,677.75
+== pos-6
+  ref  T[Alpha]@72.10,708.80  T[Base tai]@72.10,695.00  T[MARK tai]@98.40,691.55  T[tail]@134.40,695.00  T[Charlie]@72.10,677.75
+  ours T[Alpha]@72.00,708.80  T[Base tai]@72.00,695.00  T[MARK tai]@98.33,691.55  T[tail]@134.33,695.00  T[Charlie]@72.00,677.75
+== pos12
+  ref  T[Alpha]@72.10,708.80  T[Base tai]@72.10,688.10  T[MARK]@98.40,695.00  T[tail]@134.40,688.10  T[Charlie]@72.10,674.30
+  ours T[Alpha]@72.00,708.80  T[Base tai]@72.00,688.10  T[MARK]@98.33,695.00  T[tail]@134.33,688.10  T[Charlie]@72.00,674.30
+== pos-12
+  ref  T[Alpha]@72.10,708.80  T[Base tai]@72.10,695.00  T[MARK]@98.40,688.10  T[tail]@134.40,695.00  T[Charlie]@72.10,674.30
+  ours T[Alpha]@72.00,708.80  T[Base tai]@72.00,695.00  T[MARK]@98.33,688.10  T[tail]@134.33,695.00  T[Charlie]@72.00,674.30
+== pos3
+  ref  T[Alpha]@72.10,708.80  T[Base MAR]@72.10,693.25  T[MARK]@98.40,695.00  T[tail]@134.40,693.25  T[Charlie]@72.10,679.45
+  ours T[Alpha]@72.00,708.80  T[Base MAR]@72.00,693.25  T[MARK]@98.33,695.00  T[tail]@134.33,693.25  T[Charlie]@72.00,679.45
+== pos20
+  ref  T[Alpha]@72.10,708.80  T[Base tai]@72.10,683.55  T[MARK]@98.40,695.00  T[tail]@134.40,683.55  T[Charlie]@72.10,669.75
+  ours T[Alpha]@72.00,708.80  T[Base tai]@72.00,683.55  T[MARK]@98.33,695.00  T[tail]@134.33,683.55  T[Charlie]@72.00,669.75
+== pos6sz36
+  ref  T[Alpha]@72.10,708.80  T[Base MAR]@72.10,685.90  T[?]@98.40,689.40  T[tail]@152.40,685.90  T[Charlie]@72.10,670.80
+  ours T[Alpha]@72.00,708.80  T[Base MAR]@72.00,685.90  T[?]@98.33,689.40  T[tail]@152.34,685.90  T[Charlie]@72.00,670.80
+== pos6va
+  ref  T[Alpha]@72.10,708.80  T[Base MAR]@72.10,691.55  T[MARK]@98.40,695.00  T[tail]@134.40,691.55  T[Charlie]@72.10,677.75
+  ours T[Alpha]@72.00,708.80  T[Base MAR]@72.00,691.55  T[MARK]@98.33,695.00  T[tail]@134.33,691.55  T[Charlie]@72.00,677.75
+== va
+  ref  T[Alpha]@72.10,708.80  T[Base tai]@72.10,695.00  T[MARK]@98.40,699.70  T[tail]@119.25,695.00  T[Charlie]@72.10,681.20
+  ours T[Alpha]@72.00,708.80  T[Base tai]@72.00,695.00  T[MARK]@98.33,699.70  T[tail]@119.18,695.00  T[Charlie]@72.00,681.20
+== cstyle
+  ref  T[Alpha]@72.10,708.80  T[Base tai]@72.10,695.00  T[MARK]@98.40,699.70  T[tail]@119.25,695.00  T[Charlie]@72.10,681.20
+  ours T[Alpha]@72.00,708.80  T[Base tai]@72.00,695.00  T[MARK]@98.33,699.70  T[tail]@119.18,695.00  T[Charlie]@72.00,681.20
+== pstyleup
+  ref  T[Alpha]@72.10,708.80  T[Base MAR]@72.10,699.70  T[Charlie]@72.10,681.20
+  ours T[Alpha]@72.00,708.80  T[Base MAR]@72.00,699.70  T[MARK tai]@87.25,699.70  T[tail]@108.10,699.70  T[Charlie]@72.00,681.20
+== pstyledn
+  ref  T[Alpha]@72.10,708.80  T[Base MAR]@72.10,691.55  T[Charlie]@72.10,677.75
+  ours T[Alpha]@72.00,708.80  T[Base MAR]@72.00,691.55  T[MARK tai]@98.33,691.55  T[tail]@134.33,691.55  T[Charlie]@72.00,677.75

@@ -112,6 +112,21 @@ public sealed record ParagraphBorderSet
     /// </remarks>
     public bool JoinsAbove { get; init; }
 
+    /// <summary>
+    /// True when the box sits inside the paragraph's indents, as Writer's own border model puts it, rather
+    /// than growing outward past them.
+    /// </summary>
+    /// <remarks>
+    /// Writer adds a left rule and its distance to the paragraph's print area (<c>SwBorderAttrs::CalcLeft</c>,
+    /// <c>sw/source/core/layout/frmtool.cxx</c>:2408-2420) unless <c>InvertBorderSpacing</c> is set, which only
+    /// the DOCX and DOC filters set (<c>WriterFilter.cxx</c>:319, <c>ww8par.cxx</c>:2043). A reader that sets this
+    /// has already narrowed the paragraph's indents by the side allowances, so the drawing's <c>indent − allowance</c>
+    /// lands on the stated indent; what it changes is the shading, which then fills the whole box, rules and
+    /// distances included — measured on an RTF <c>\cbpat</c> paragraph with a <c>\box</c>, whose fill runs from
+    /// the box's outer top to its outer bottom.
+    /// </remarks>
+    public bool InsideIndents { get; init; }
+
     /// <summary>True when no side draws and none takes room.</summary>
     public bool IsEmpty
         => Left is null && Right is null && Top is null && Bottom is null && Between is null;

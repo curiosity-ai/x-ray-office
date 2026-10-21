@@ -7,20 +7,22 @@ using Shouldly;
 namespace XRay.Office.Presentations.Tests;
 
 /// <summary>
-/// What the reader makes of an extended ("chartex") chart part, and why it is so much less than
-/// the part states.
+/// What the reader makes of an extended ("chartex") chart part, against the 26.8 daily.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The literals here are the shape both corpus witnesses have —
+/// The first literals are the shape both corpus witnesses have —
 /// <c>054_Problem_analysis_with_Pareto_chart_11058329.xlsx</c> and
 /// <c>051_Manufacturer_defect_analysis_53db27ea.xlsx</c>, which are one template twice: two
-/// <c>cx:data</c> blocks, four series alternating <c>clusteredColumn</c> and <c>paretoLine</c>,
-/// and three axes.
+/// <c>cx:data</c> blocks, four series alternating <c>clusteredColumn</c> and <c>paretoLine</c>.
+/// 26.2.4.2 drew two polylines for them; 26.8 draws neither, because none of the four has a
+/// plotter, and puts its notice over the axes instead. That template was rebuilt from
+/// <c>chart2/qa/extras/data/xlsx/paretoLine.xlsx</c> at five, ten and twenty points and rendered
+/// through the daily: no series mark, the notice, a value axis of 0 to 12.
 /// </para>
 /// <para>
-/// Every assertion below is a measurement of 26.2.4.2's own rendering of one of those two, taken
-/// out of the reference bank's content stream — see <c>probes/chart-rest-r104</c> §2.
+/// The others are the QA documents' own parts, trimmed: <c>SimpleHistogram.xlsx</c>,
+/// <c>paretoLine.xlsx</c>, <c>funnel1.xlsx</c> and <c>forum-mso-de-138303.pptx</c>.
 /// </para>
 /// </remarks>
 public class DrawingChartexTests
@@ -29,7 +31,7 @@ public class DrawingChartexTests
     private const string A = "http://schemas.openxmlformats.org/drawingml/2006/main";
 
     /// <summary>The two witnesses' shape, with the series list supplied.</summary>
-    private static string Part(string series, string data = "")
+    private static string Part(string series, string data = "", string axes = "")
         => $"""
             <cx:chartSpace xmlns:cx="{CX}" xmlns:a="{A}">
               <cx:chartData>
@@ -46,26 +48,40 @@ public class DrawingChartexTests
               <cx:chart><cx:plotArea><cx:plotAreaRegion>
                 <cx:plotSurface><cx:spPr><a:ln><a:noFill/></a:ln></cx:spPr></cx:plotSurface>
                 {series}
-              </cx:plotAreaRegion></cx:plotArea></cx:chart>
+              </cx:plotAreaRegion>{axes}</cx:plotArea></cx:chart>
               <cx:spPr><a:noFill/><a:ln><a:noFill/></a:ln></cx:spPr>
             </cx:chartSpace>
             """;
+
+    private const string TwoAxes =
+        """
+        <cx:axis id="0"><cx:catScaling gapWidth="0"/><cx:tickLabels/></cx:axis>
+        <cx:axis id="1"><cx:valScaling/><cx:majorGridlines/><cx:tickLabels/></cx:axis>
+        """;
 
     /// <summary>The workbook the two witnesses reference through hidden defined names.</summary>
     private static ChartRangeValues? Resolve(string formula) => formula switch
     {
         "Cats" => new ChartRangeValues(["a", "b", "c"], [null, null, null]),
-
-        // The second block's category range is one cell longer than the first's — the header row
-        // — which is what both witnesses state and what makes the "longest wins" reading wrong.
         "WideCats" => new ChartRangeValues(["hdr", "a", "b", "c"], [null, null, null, null]),
         "Vals" => new ChartRangeValues(["35", "25", "21"], [35, 25, 21]),
         "Cumulative" => new ChartRangeValues(["0.5", "0.8", "1"], [0.5, 0.8, 1.0]),
+        "Hist" => new ChartRangeValues(["12", "10", "11", "13", "15"], [12, 10, 11, 13, 15]),
         _ => null,
     };
 
-    private static ChartPlot Require(string markup)
-        => DrawingChartex.Read(XElement.Parse(markup), ranges: Resolve)
+    /// <summary>The range each hidden name stands for, as a workbook expands it.</summary>
+    private static string Expand(string formula) => formula switch
+    {
+        "Hist" => "Sheet1!$A$1:$A$5",
+        "Vals" => "Sheet1!$C$4:$C$6",
+        _ => formula,
+    };
+
+    private static ChartPlot Require(string markup, bool workbook = true)
+        => (workbook
+               ? DrawingChartex.Read(XElement.Parse(markup), ranges: Resolve, expand: Expand)
+               : DrawingChartex.Read(XElement.Parse(markup), automaticChartAreaLine: false))
            ?? throw new InvalidOperationException("the reader found nothing to draw");
 
     private const string TwoColumnsTwoParetos =
@@ -76,7 +92,6 @@ public class DrawingChartexTests
           <cx:dataId val="0"/><cx:axisId val="1"/>
         </cx:series>
         <cx:series layoutId="paretoLine" ownerIdx="0" formatIdx="1">
-          <cx:spPr><a:ln><a:solidFill><a:srgbClr val="FD4C00"/></a:solidFill></a:ln></cx:spPr>
           <cx:axisId val="2"/>
         </cx:series>
         <cx:series layoutId="clusteredColumn" hidden="1" formatIdx="2">
@@ -88,132 +103,179 @@ public class DrawingChartexTests
         </cx:series>
         """;
 
-    /// <summary>
-    /// The two data-bearing series become lines and the two <c>paretoLine</c> series draw nothing.
-    /// </summary>
-    /// <remarks>
-    /// 26.2.4.2 draws exactly two eleven-point polylines on each witness' page and no third mark:
-    /// on <c>054</c>'s they are <c>(63.649, 141.149)-(556.833, 369.706)</c> and
-    /// <c>(63.649, 376.640)-(556.833, 381.966)</c>, ten segments each. The two
-    /// <c>cx:paretoLine</c> series carry no <c>cx:dataId</c> at all — they derive from their
-    /// <c>@ownerIdx</c> — and the reference's own <c>--convert-to fods</c> gives both of them an
-    /// empty <c>chart:values-cell-range-address</c>.
-    /// </remarks>
-    [Fact]
-    public void OnlyTheSeriesThatNameDataAreDrawnAndTheyAreDrawnAsLines()
-    {
-        ChartPlot plot = Require(Part(TwoColumnsTwoParetos));
+    private const string Histogram =
+        """
+        <cx:series layoutId="clusteredColumn">
+          <cx:dataId val="2"/><cx:layoutPr><cx:binning intervalClosed="r"/></cx:layoutPr>
+        </cx:series>
+        """;
 
-        plot.Kind.ShouldBe(ChartPlotKind.Line);
+    private const string HistogramData =
+        """<cx:data id="2"><cx:numDim type="val"><cx:f>Hist</cx:f></cx:numDim></cx:data>""";
+
+    /// <summary>
+    /// The witnesses' template has no plotter for any of its series: nothing is drawn of them and
+    /// the notice is.
+    /// </summary>
+    [Fact]
+    public void AClusteredColumnWithoutBinningAndAParetoLineHaveNoPlotter()
+    {
+        ChartPlot plot = Require(Part(TwoColumnsTwoParetos, axes: TwoAxes));
+
         plot.Series.Count.ShouldBe(2);
+        plot.Series.ShouldAllBe(series => series.IsUnsupported);
+        plot.UnsupportedNotice.ShouldBe(DrawingChartex.UnsupportedNotice);
         plot.Series[0].Name.ShouldBe("OCCURRENCES");
-        plot.Series[0].Values.ShouldBe([35, 25, 21]);
-        plot.Series[1].Name.ShouldBe("CUMULATIVE PERCENT");
-        plot.Series[1].Values.ShouldBe([0.5, 0.8, 1.0]);
     }
 
-    /// <summary>The categories are the first data block's, not the longest.</summary>
-    /// <remarks>
-    /// <c>rTypeGroups.front()->createCategorySequence()</c>
-    /// (<c>oox/source/drawingml/chart/axisconverter.cxx</c>:290, this tree). Both witnesses'
-    /// second block names a range one cell longer than the first, so taking the longest spreads
-    /// eleven points over twelve slots: measured on <c>054</c>, the polyline then ends at
-    /// x 512.02 where 26.2.4.2's ends at 556.83, and with the first block's it ends at 556.86.
-    /// </remarks>
-    [Fact]
-    public void TheCategoriesComeFromTheFirstDataBearingSeries()
-        => Require(Part(TwoColumnsTwoParetos)).Categories.ShouldBe(["a", "b", "c"]);
-
     /// <summary>
-    /// A chartex chart draws no axis, no tick, no label and no legend, because the reference
-    /// draws none.
+    /// A <c>clusteredColumn</c> with a <c>cx:binning</c> is a histogram over Scott's bins, with gap
+    /// width zero and no notice.
     /// </summary>
     /// <remarks>
-    /// Counted out of 26.2.4.2's own page for both witnesses: a white plot rectangle, two
-    /// polylines, and nothing else — no axis line, no tick mark, no tick label, no category
-    /// label, no legend key and no title. Every one of these properties defaults to *on*, so the
-    /// assertion is that the reader turned each of them off rather than that it left them alone.
+    /// SimpleHistogram.xlsx on the daily: <c>[10-13.94]</c> under a bar of 4 and
+    /// <c>(13.94-17.87]</c> under a bar of 1, the bars touching.
     /// </remarks>
     [Fact]
-    public void NoAxisFurnitureIsDrawn()
+    public void ABinnedClusteredColumnIsAHistogram()
     {
-        ChartPlot plot = Require(Part(TwoColumnsTwoParetos));
+        ChartPlot plot = Require(Part(Histogram, HistogramData, TwoAxes));
+
+        plot.Kind.ShouldBe(ChartPlotKind.Bar);
+        plot.Categories.ShouldBe(["[10-13.94]", "(13.94-17.87]"]);
+        plot.Series.Single().Values.ShouldBe([4.0, 1.0]);
+        plot.Series.Single().IsUnsupported.ShouldBeFalse();
+        plot.GapWidth.ShouldBe(0.0);
+        plot.UnsupportedNotice.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// An unnamed series in a workbook is named by Calc from its range, and in a deck by the
+    /// internal data provider.
+    /// </summary>
+    /// <remarks>
+    /// tdf163727_histogram_roundtrip_multi_chart.xlsx's legend reads "Column A"; the waterfall of
+    /// forum-mso-de-138303.pptx reads "Series1".
+    /// </remarks>
+    [Fact]
+    public void AnUnnamedSeriesIsNamedByItsHost()
+    {
+        Require(Part(Histogram, HistogramData, TwoAxes)).Series.Single().Name.ShouldBe("Column A");
+
+        string cached = Part(
+            """<cx:series layoutId="waterfall"><cx:dataId val="3"/></cx:series>""",
+            """
+            <cx:data id="3"><cx:numDim type="val"><cx:lvl ptCount="2">
+              <cx:pt idx="0">13</cx:pt><cx:pt idx="1">-5</cx:pt></cx:lvl></cx:numDim></cx:data>
+            """,
+            TwoAxes);
+        Require(cached, workbook: false).Series.Single().Name.ShouldBe("Series1");
+    }
+
+    /// <summary>
+    /// A chartex axis is a non-2007 model: an absent tick-mark element is cross, minor ticks
+    /// included, and the axes are X and Y by position.
+    /// </summary>
+    [Fact]
+    public void AnAbsentTickMarkIsCrossAndMinorTicksAreDrawn()
+    {
+        ChartPlot plot = Require(Part(Histogram, HistogramData, TwoAxes));
+
+        plot.ValueTicks.ShouldBe(ChartTickMark.Cross);
+        plot.CategoryTicks.ShouldBe(ChartTickMark.Cross);
+        plot.ValueMinorTicks.ShouldBe(ChartTickMark.Cross);
+        plot.CategoryMinorTicks.ShouldBe(ChartTickMark.Cross);
+        plot.ValueGrid.ShouldNotBeNull();
+        plot.ValueAxisVisible.ShouldBeTrue();
+        plot.CategoryAxisVisible.ShouldBeTrue();
+    }
+
+    /// <summary>A part with no axes draws neither: a treemap is its title and its notice.</summary>
+    [Fact]
+    public void APartWithNoAxesDrawsNone()
+    {
+        ChartPlot plot = Require(Part(
+            """<cx:series layoutId="treemap"><cx:dataId val="0"/></cx:series>"""));
 
         plot.ValueAxisVisible.ShouldBeFalse();
         plot.CategoryAxisVisible.ShouldBeFalse();
-        plot.SecondaryAxisVisible.ShouldBeFalse();
-        plot.ValueLabelsVisible.ShouldBeFalse();
-        plot.CategoryLabelsVisible.ShouldBeFalse();
-        plot.ValueTicks.ShouldBe(ChartTickMark.None);
-        plot.CategoryTicks.ShouldBe(ChartTickMark.None);
-        plot.Legend.ShouldBe(ChartLegendPosition.None);
+        plot.UnsupportedNotice.ShouldNotBeNull();
     }
 
     /// <summary>
-    /// The plot rectangle is painted white and the chart area is left alone.
+    /// A pareto's column series is alone in the first axes set and so is a histogram, measured
+    /// against a scale nobody draws; the axes shown are the second set's, which carry no grid.
     /// </summary>
     /// <remarks>
-    /// Both witnesses' <c>cx:spPr</c> is <c>a:noFill</c>, and both pages carry one white filled
-    /// rectangle over the plot: on <c>051</c> it is
-    /// <c>(122.969, 64.102)-(431.092, 236.696)</c>, and it is what hides the sheet's cream
-    /// background — at the round's base, with no chart drawn, that rectangle held 148 032 ink
-    /// pixels at 120 dpi against the reference's 2 029.
+    /// paretoLine.xlsx on the daily: bars of 6 and 4 under a visible axis of 0 to 12 whatever the
+    /// data, no horizontal gridline although axis 1 states one, and the notice over the bars.
     /// </remarks>
     [Fact]
-    public void ThePlotRectangleIsWhiteAndTheChartAreaIsNot()
+    public void AParetoIsAHiddenScaleHistogramUnderTheSecondSetsAxes()
     {
-        ChartPlot plot = Require(Part(TwoColumnsTwoParetos));
+        ChartPlot plot = Require(Part(
+            Histogram + """<cx:series layoutId="paretoLine" ownerIdx="0"><cx:axisId val="2"/></cx:series>""",
+            HistogramData,
+            TwoAxes));
 
-        plot.PlotBackground.ShouldBe(Colour.White);
-        plot.Background.ShouldBeNull();
+        ChartSeries bars = plot.Series.Single();
+        bars.IsUnsupported.ShouldBeFalse();
+        bars.AxisIndex.ShouldBe(1);
+        plot.SecondaryAxisVisible.ShouldBeFalse();
+        plot.ValueAxisVisible.ShouldBeTrue();
+        plot.ValueGrid.ShouldBeNull();
+        plot.UnsupportedNotice.ShouldNotBeNull();
+        plot.Categories.ShouldBe(["[10-13.94]", "(13.94-17.87]"]);
     }
 
-    /// <summary>A series' own <c>cx:spPr</c> decides its line colour.</summary>
-    /// <remarks>
-    /// <c>054</c>'s first series states <c>a:solidFill/a:schemeClr val="tx2"</c>, whose theme
-    /// entry is <c>4D62EF</c>, and 26.2.4.2 strokes that series' polyline in
-    /// <c>(0.302, 0.3843, 0.9373)</c> — 77, 98, 239. A <c>cx:series</c> states its fill where a
-    /// <c>c:ser</c> drawn as a line would state a line, so the fill is read when there is no
-    /// line.
-    /// </remarks>
+    /// <summary>
+    /// A series stating no categories is given 1 … N, and a category axis' number format is not
+    /// applied to them.
+    /// </summary>
+    /// <remarks>funnel1.xlsx states <c>0.00E+00</c> on its axis and the daily draws 1 to 6.</remarks>
     [Fact]
-    public void ASeriesFillBecomesItsLineColour()
-        => Require(Part(TwoColumnsTwoParetos)).Series[0].Line
-            .ShouldBe(new Colour(0x4D, 0x62, 0xEF));
-
-    /// <summary>A cached <c>cx:lvl</c> is used where the part states one.</summary>
-    /// <remarks>
-    /// Neither corpus witness states a cache — both reference the workbook through hidden
-    /// <c>_xlchart.v1.n</c> defined names — but the element exists, and the order here is the one
-    /// <c>ExcelChartConverter::createDataSequence</c> uses for a <c>c:</c> chart.
-    /// </remarks>
-    [Fact]
-    public void ACachedSequenceIsReadWithoutTheWorkbook()
+    public void AnUncategorisedSeriesIsNumberedAndItsCategoriesAreText()
     {
-        ChartPlot plot = DrawingChartex.Read(XElement.Parse(
-            $"""
-             <cx:chartSpace xmlns:cx="{CX}" xmlns:a="{A}">
-               <cx:chartData><cx:data id="0">
-                 <cx:strDim type="cat"><cx:lvl ptCount="2">
-                   <cx:pt idx="0">one</cx:pt><cx:pt idx="1">two</cx:pt></cx:lvl></cx:strDim>
-                 <cx:numDim type="val"><cx:lvl ptCount="2">
-                   <cx:pt idx="0">4</cx:pt><cx:pt idx="1">9</cx:pt></cx:lvl></cx:numDim>
-               </cx:data></cx:chartData>
-               <cx:chart><cx:plotArea><cx:plotAreaRegion>
-                 <cx:series layoutId="clusteredColumn"><cx:dataId val="0"/></cx:series>
-               </cx:plotAreaRegion></cx:plotArea></cx:chart>
-             </cx:chartSpace>
-             """)) ?? throw new InvalidOperationException("nothing drawable");
+        ChartPlot plot = Require(Part(
+            """<cx:series layoutId="funnel"><cx:dataId val="2"/></cx:series>""",
+            HistogramData,
+            """
+            <cx:axis id="0"><cx:catScaling gapWidth="0.06"/><cx:majorTickMarks type="in"/>
+              <cx:tickLabels/><cx:numFmt formatCode="0.00E+00" sourceLinked="0"/></cx:axis>
+            """));
 
-        plot.Categories.ShouldBe(["one", "two"]);
-        plot.Series.Single().Values.ShouldBe([4, 9]);
+        plot.Categories.ShouldBe(["1", "2", "3", "4", "5"]);
+        plot.CategoryFormat.ShouldBeNull();
+        plot.CategoryTicks.ShouldBe(ChartTickMark.Inner);
+        plot.ValueAxisVisible.ShouldBeFalse();
+        plot.ShiftedCategories.ShouldBeFalse();
+    }
+
+    /// <summary>
+    /// A chart area and a wall stating no fill are white in a workbook or a document and left
+    /// alone in a deck.
+    /// </summary>
+    [Fact]
+    public void AnUnstatedChartAreaIsWhiteOutsideImpress()
+    {
+        string part = $"""
+            <cx:chartSpace xmlns:cx="{CX}" xmlns:a="{A}">
+              <cx:chartData>{HistogramData}</cx:chartData>
+              <cx:chart><cx:plotArea><cx:plotAreaRegion>{Histogram}</cx:plotAreaRegion>{TwoAxes}
+              </cx:plotArea></cx:chart>
+            </cx:chartSpace>
+            """;
+
+        ChartPlot sheet = Require(part);
+        sheet.Background.ShouldBe(Colour.White);
+        sheet.PlotBackground.ShouldBe(Colour.White);
+
+        ChartPlot slide = DrawingChartex.Read(
+            XElement.Parse(part), ranges: Resolve, automaticChartAreaLine: false)!;
+        slide.Background.ShouldBeNull();
     }
 
     /// <summary>A part whose every series derives from another draws nothing.</summary>
-    /// <remarks>
-    /// The reader answers null rather than an empty plot, which is what keeps a frame with no
-    /// resolvable data from painting a white rectangle over whatever is under it.
-    /// </remarks>
     [Fact]
     public void APartWhoseSeriesNameNoDataIsNotDrawn()
         => DrawingChartex.Read(XElement.Parse(Part(

@@ -283,7 +283,10 @@ public class ChartLegendLayoutTests
         ChartDrawing bare = Place(plot);
         ChartDrawing with = Place(titled);
 
-        Length title = (titled.AxisTitleSize * 1.15) + (titled.AxisTitleSize * (0.30 * 2))
+        // The rotated title's width is its shape's height: its line, its two vertical insets — a
+        // flat round(423 x 0.30) = 127 each since the 26.8 retarget (2026-10-21), sized by the
+        // model's 12 pt default and not by the title (ChartLayout.TitleInsetEm) — and the flat 450.
+        Length title = (titled.AxisTitleSize * 1.15) + Length.FromMm100(127 * 2)
                        + Length.FromMm100(450);
 
         Near(with.DiagramArea.Left - bare.DiagramArea.Left, title);

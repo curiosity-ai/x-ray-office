@@ -169,6 +169,9 @@ public sealed partial class RtfDocumentReader
     /// <summary><c>\hyphcaps0</c>: a word in capitals is not hyphenated.</summary>
     private bool _noHyphenateCaps;
 
+    /// <summary><c>\widowctrl</c>, the document's widow control; see the hyphenation zone it brings.</summary>
+    private bool _widowControl;
+
     private int _colourRed;
     private int _colourGreen;
     private int _colourBlue;
@@ -439,10 +442,21 @@ public sealed partial class RtfDocumentReader
         // property and \pich is not a paragraph one, and both share their prefix with nothing else.
         if (HandlePictureWord(token)) return;
 
+        // The paragraph-frame words, which only ever set the group's frame state.
+        if (state.Frame.With(token.Name, token.Parameter, CurrentFlow.InTable) is { } frame)
+        {
+            state.Frame = frame;
+            return;
+        }
+
         // Inside a {\stylesheet} entry, remember that the entry mentioned this word at all. The
         // merge through \sbasedon needs "the style said nothing" kept apart from "the style said
         // the default", and RTF's toggles cannot express that in the group state alone.
         state.StyleSheetStated?.Add(token.Name);
+
+        // A paragraph's border and shading words, which share their describing words with a cell's and a
+        // page's and so have to know which of the three was selected last.
+        if (HandleParagraphBorderWord(token, state)) return;
 
         switch (token.Name)
         {
@@ -834,7 +848,12 @@ public sealed partial class RtfDocumentReader
                 _noHyphenateCaps = token.Parameter == 0;
                 return;
             case "hyphpar":
-                state.SuppressesHyphenation = token.Parameter == 0;
+                state.Hyphenates = token.Parameter != 0;
+                return;
+            case "widowctrl":
+                // Read for the hyphenation zone alone: writerfilter's settings pass puts the zone and the
+                // keep on Standard when this, `\hyphauto` or `\hyphcaps0` is set.
+                _widowControl = (token.Parameter ?? 1) != 0;
                 return;
             case "widctlpar":
                 state.HasWidowControl = true;
@@ -1019,6 +1038,12 @@ public sealed partial class RtfDocumentReader
                 return;
             case "nosupersub":
                 state.VerticalPosition = 0;
+                return;
+            case "up":
+                state.PositionHalfPoints = token.Parameter ?? 6;
+                return;
+            case "dn":
+                state.PositionHalfPoints = -(token.Parameter ?? 6);
                 return;
             case "v":
                 // Hidden text: not displayed by any reader, so extracting it would inject text

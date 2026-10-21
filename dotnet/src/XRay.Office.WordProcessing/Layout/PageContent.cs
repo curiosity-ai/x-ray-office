@@ -340,6 +340,21 @@ public sealed record PageParagraph : PageBlock
     public bool HasScriptSpace
         => _hasScriptSpace ??= AddsScriptSpace && ScriptSpacing.Boundaries(Text).Count > 0;
 
+    private bool[]? _gridCharacters;
+
+    /// <summary>
+    /// Which characters the page's character grid reaches, or null when the paragraph is on none.
+    /// </summary>
+    /// <remarks>
+    /// The third reason a paragraph cannot take the single-face shortcut, for the same reason as
+    /// <see cref="HasScriptSpace"/>: the cells are widths the prefix table carries. See
+    /// <see cref="CharacterGrid"/>.
+    /// </remarks>
+    public bool[]? GridCharacters
+        => Format.TextGrid?.Characters is null
+            ? null
+            : _gridCharacters ??= CharacterGrid.AsianCharacters(Text);
+
     /// <summary>
     /// The device grid the paragraph's fonts are measured through.
     /// </summary>
@@ -435,8 +450,8 @@ public sealed record PageParagraph : PageBlock
     /// </para>
     /// <para>
     /// Set by the DOCX reader for a document stating <c>w:compat/w:ulTrailSpace</c>, which is
-    /// <c>MS_WORD_UL_TRAIL_SPACE</c>. Native ODF, whose trailing blanks Writer keeps by default, wants it
-    /// too and is not set here.
+    /// <c>MS_WORD_UL_TRAIL_SPACE</c>, and by the ODT reader from the two settings that spell the same pair
+    /// (<c>OdtLayoutSource.DecoratesTrailingBlank</c>), which a native ODF document leaves at decorating.
     /// </para>
     /// </remarks>
     public bool DecoratesTrailingBlank { get; init; }
@@ -746,7 +761,8 @@ public sealed record PageParagraph : PageBlock
 
         return MeasuredParagraph.Measure(
             Text, runs, shaper: null, Itemisation, MeasurementObjects(), metrics,
-            BlanksAreTransparentToHeight, WriterLineBox.LeadingAboveText, AddsScriptSpace);
+            BlanksAreTransparentToHeight, WriterLineBox.LeadingAboveText, AddsScriptSpace,
+            Format.TextGrid?.Characters);
     }
 
     /// <summary>
@@ -1054,6 +1070,11 @@ public sealed record PageNote
 /// the family class and the language the glyph-fallback pattern is built with; see
 /// <see cref="XRay.Office.Text.Fonts.FontItem"/>.
 /// </param>
+/// <param name="UnescapedEmSize">
+/// The size the run would take were it not escaped, or zero when it is not raised or lowered at all. Set
+/// beside a non-zero <paramref name="Rise"/>, because an escaped portion's line metrics are Writer's
+/// mixture of its own and the unshrunk font's — see <see cref="FormattedRun.UnescapedEmSize"/>.
+/// </param>
 /// <param name="Link">
 /// Where the run leads when it is clicked, or null when it is not a link. An address is an external
 /// link; an address beginning <c>#</c> names a bookmark in this document. It changes no measurement
@@ -1076,7 +1097,8 @@ public readonly record struct PageRun(
     Length Tracking = default,
     int WidthPerCent = 100,
     FontItem Item = default,
-    string? Link = null)
+    string? Link = null,
+    Length UnescapedEmSize = default)
 {
     /// <summary>One past the run's last character.</summary>
     public int End => Start + Length;
@@ -1137,7 +1159,9 @@ public readonly record struct PageRun(
     /// same character is a line laid out at one width and painted at another.
     /// </remarks>
     public FormattedRun ToFormattedRun()
-        => new(Start, Length, Face, EmSize, Shaping, MetricEmSize, Tracking, WidthPerCent, Item);
+        => new(
+            Start, Length, Face, EmSize, Shaping, MetricEmSize, Tracking, WidthPerCent, Item,
+            UnescapedEmSize > Core.Units.Length.Zero ? Rise : Core.Units.Length.Zero, UnescapedEmSize);
 
     /// <summary>
     /// True when two resolved fonts disagree about whether their glyphs are drawn leaning.

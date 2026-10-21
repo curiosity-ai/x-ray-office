@@ -344,6 +344,14 @@ public class ChartLayoutTests
     /// which is why the title sat 9.57 pt high on every chart in the corpus.
     /// </para>
     /// <para>
+    /// <strong>The second term is no longer the title's own (2026-10-21, against the 26.8
+    /// daily).</strong> The 26.8 branch sizes a title's insets by the chart model's 12 pt default
+    /// rather than by the title (<c>ChartLayout.TitleInsetEm</c>), so the inset is the flat
+    /// <c>round(423 x 0.30)</c> = 127 at every size and the slope the 26.2.4.2 probe measured is
+    /// gone. On <c>slide-chart-accounting-axis.pptx</c>'s 13 pt title that is 0.31 pt higher than
+    /// 26.2.4.2, which is what the daily draws.
+    /// </para>
+    /// <para>
     /// <strong>A drift guard, not a law test</strong> — it restates the arithmetic. What gives it
     /// teeth is that dropping either term fails it, which is what
     /// <c>verify-test.sh</c> was pointed at.
@@ -355,7 +363,7 @@ public class ChartLayoutTests
     [InlineData(13.0)]
     [InlineData(18.0)]
     [InlineData(36.0)]
-    public void AMainTitlesFirstLineClearsTheFlatGapAndItsOwnUpperInset(double points)
+    public void AMainTitlesFirstLineClearsTheFlatGapAndTheTwelvePointUpperInset(double points)
     {
         Length size = Length.FromPoints(points);
         ChartDrawing drawing = Place(Bars() with { Title = "Title", TitleSize = size });
@@ -366,7 +374,7 @@ public class ChartLayoutTests
             Frame.Y
             + (Frame.Height * 0.02)
             + Length.FromMm100(135)
-            + Length.FromMm100((long)Math.Round(size.Mm100 * 0.30, MidpointRounding.AwayFromZero))
+            + Length.FromMm100(127)
             + (size * 1.15 / 2);
 
         title.At.Y.ShouldBe(expected);

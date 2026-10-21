@@ -25,8 +25,12 @@ namespace XRay.Office.Core.Tests;
 /// </remarks>
 public class HyphenationTests
 {
-    /// <summary>Where LibreOffice 26.2.4.2 keeps the three files this tree does not ship.</summary>
-    private const string Extensions = "/opt/libreoffice26.2/share/extensions";
+    /// <summary>Where the reference install keeps the three files this tree does not ship.</summary>
+    /// <remarks>
+    /// The 26.8 branch daily since 2026-10-21. Its <c>hyph_fr.dic</c>, <c>hyph_es.dic</c> and both
+    /// English files are byte-identical to 26.2.4.2's, which these breaks were read against.
+    /// </remarks>
+    private const string Extensions = "/opt/libreofficedev26.8/share/extensions";
 
     private static IHyphenator English => Hyphenators.For("en-US")
         ?? throw new InvalidOperationException(

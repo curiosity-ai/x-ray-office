@@ -162,6 +162,15 @@ public readonly record struct RtfLayoutRun(
 /// The bookmarks the paragraph holds, with the offsets of its text they sit at, or null for none.
 /// </param>
 /// <param name="OutlineLevel">The paragraph's outline level, 1 and up, or 0 for body text.</param>
+/// <param name="FrameRequest">
+/// The paragraph frame its <c>\absw</c>, <c>\posx</c> and kindred words ask for, or null when it is not
+/// framed.
+/// </param>
+/// <param name="Borders">
+/// The border sides its selectors named, as stated — <see cref="RtfParagraphBorders"/> turns them into what
+/// Writer draws once the neighbours are known — or null for none.
+/// </param>
+/// <param name="Shading">Its <c>\cbpat</c> background, or null when it is not shaded.</param>
 public readonly record struct RtfLayoutParagraph(
     string Text,
     ParagraphFormat Format,
@@ -180,7 +189,10 @@ public readonly record struct RtfLayoutParagraph(
     bool AutoKerning = false,
     int WidthPerCent = 100,
     IReadOnlyList<RtfLayoutAnchor>? Anchors = null,
-    int OutlineLevel = 0);
+    int OutlineLevel = 0,
+    Layout.ParagraphFrameRequest? FrameRequest = null,
+    Layout.ParagraphBorderSet? Borders = null,
+    Colour? Shading = null);
 
 /// <summary>
 /// A floating frame as RTF states it: a shape's rectangle, its wrap, and the text inside it.

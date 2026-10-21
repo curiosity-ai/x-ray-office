@@ -98,6 +98,12 @@ public sealed class SlideShapeGeometryComparisonTests : IDisposable
         }
     }
 
+    /// <summary>The three dashed connectors on slide 3: their ends, their pens and their dash arrays.</summary>
+    /// <remarks>
+    /// The first line's large <c>stealth</c> tail is where the 26.8 branch moved: it stops the shaft at
+    /// the marker's notch (upstream <c>a0c13790095</c>), so the daily ends it at 495.978 pt where
+    /// 26.2.4.2 ended it at 489.969. <c>LineEnds.Consumed</c> follows; <c>LineEndNotchTests</c> pins it.
+    /// </remarks>
     [Fact]
     public void EveryDashedLineCarriesLibreOfficesOwnDashArray()
     {

@@ -153,6 +153,19 @@ public readonly record struct Ww8LayoutFormat
     /// <summary>True when widow and orphan control applies.</summary>
     public bool? HasWidowControl { get; init; }
 
+    /// <summary>
+    /// Whether the paragraph is hyphenated, from <c>sprmPFNoAutoHyph</c> — whose operand says the opposite —
+    /// or null when no layer of it states one and the <c>Dop</c>'s <c>fAutoHyphen</c> decides.
+    /// </summary>
+    /// <remarks>
+    /// <c>SwWW8ImplReader::Read_Hyphenation</c> (<c>sw/source/filter/ww8/ww8par6.cxx</c>:5378-5398):
+    /// <c>SetHyphen(0 == *pData)</c>, <em>"sic !"</em>.
+    /// </remarks>
+    public bool? Hyphenates { get; init; }
+
+    /// <summary><c>sprmPFUsePgsuSettings</c>: whether the paragraph snaps to the page's text grid, or null.</summary>
+    public bool? UsesPageGrid { get; init; }
+
     /// <summary>True when the space between two paragraphs of the same style is suppressed.</summary>
     public bool? HasContextualSpacing { get; init; }
 
@@ -386,10 +399,19 @@ public readonly record struct Ww8LayoutFormat
     /// </summary>
     /// <remarks>
     /// Unresolved, as everywhere else: the rise is a fraction of the <em>face's</em> height, and this reader
-    /// has no faces. WW8's other spelling, <c>sprmCHpsPos</c>, states a half-point offset outright and is
-    /// not read yet — a document using one gets no shift rather than a wrong one.
+    /// has no faces. WW8's other spelling is <see cref="PositionHalfPoints"/>; whichever came last wins,
+    /// since both are <c>RES_CHRATR_ESCAPEMENT</c> to the importer.
     /// </remarks>
     public Layout.Escapement? Escapement { get; init; }
+
+    /// <summary>
+    /// The half-point offset <c>sprmCHpsPos</c> states, or null when the run states none.
+    /// </summary>
+    /// <remarks>
+    /// Kept as stated, because the escapement it becomes is a percentage of the run's own size, and the
+    /// size may be stated after it in the same exception.
+    /// </remarks>
+    public short? PositionHalfPoints { get; init; }
 
     /// <summary>
     /// Translates into the layout engine's own properties.
@@ -469,9 +491,17 @@ public readonly record struct Ww8LayoutFormat
     /// </remarks>
     private LineSpacingRule Spacing()
     {
-        if (LineSpacing is not { } value || value == 0) return LineSpacingRule.SingleSpaced;
+        if (LineSpacing is not { } value) return LineSpacingRule.SingleSpaced;
 
-        if (IsMultipleLineSpacing) return LineSpacingRule.Multiple(Math.Abs(value) / 240.0);
+        if (IsMultipleLineSpacing)
+            return value == 0 ? LineSpacingRule.SingleSpaced : LineSpacingRule.Multiple(Math.Abs(value) / 240.0);
+
+        // A stated nought is at least nought (`Read_LineSpace`, `ww8par6.cxx`:4565-4602), which is single
+        // spacing everywhere but on a text grid: there `CalcRealHeight` reads an at-least of nought as the
+        // text's own height (tdf#164871). Measured on 26.8's daily with its own `.doc` export of
+        // `probes/words-textgrid-r268/g1-lines360.docx`: 2.65 pt lower and every line after it 10.70 pt
+        // lower when it was read as single.
+        if (value == 0) return LineSpacingRule.AtLeast(Length.Zero);
 
         return value > 0
             ? LineSpacingRule.AtLeast(Length.FromTwips(value))

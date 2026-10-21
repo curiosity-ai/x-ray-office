@@ -441,7 +441,7 @@ public static class OfficeMathBox
     {
         XElement? properties = Part(element, "naryPr");
         Rect body = Of(Part(element, "e"), fontHeight);
-        Rect symbol = Blank(TextHeightAt(fontHeight * (100 + DistOperatorSize) / 100));
+        Rect symbol = Symbol(Value(properties, "chr"), fontHeight);
 
         int limitHeight = fontHeight > BaseSize / 3 ? fontHeight * RelLimits / 100 : fontHeight;
         int gap = fontHeight * DistLimit / 100;
@@ -459,9 +459,58 @@ public static class OfficeMathBox
 
         if (body.Height <= 0) return oper;
 
-        // The symbol's own centre on the body's, carrying its limits with it.
-        int dy = (body.Top + body.Bottom) / 2 - (symbol.Top + symbol.Bottom) / 2;
+        // `AlignTo(*pBody, …, RectVerAlign::Mid)`: the operator's math axis on the body's, carrying its
+        // limits with it (rect.cxx:365-367). The symbol's axis is not its glyph's centre — a sum sign
+        // stands 0.6 pt above the axis it is set on.
+        int dy = body.AlignM - symbol.AlignM;
         return Extend(body, oper.Moved(dy), BaselineOf.This);
+    }
+
+    /// <summary>
+    /// The height of an n-ary operator's rectangle: its glyph's own bounds in StarMath's font, not a row
+    /// of text.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Two rules, neither a text height. <c>SmOperNode::CalcSymbolHeight</c> (node.cxx:1487-1512) sets the
+    /// symbol at <c>(h + 20 %) × (1 + DIS_OPERATORSIZE) × 686 / 845</c> of the body's font height, each step an
+    /// integer division — 616 hundredths of a millimetre at the 12 pt base, where 150 % would be 634; the
+    /// reference's PDF draws the 12 pt formula's sum sign at 17.40 pt. And <c>SmRect</c>'s constructor
+    /// clips a symbol from <c>OpenSymbol</c> to its glyph's bounds plus the border, a twentieth of the
+    /// font height each side (<c>bAllowSmaller</c>, <c>starmath/source/rect.cxx</c>:242-248;
+    /// <c>SmFace::GetDefaultBorderWidth</c>, <c>utility.hxx</c>:67).
+    /// </para>
+    /// <para>
+    /// The glyph extents are OpenSymbol's own <c>glyf</c> bounds, because StarMath draws every operator in
+    /// that face whatever the document names. Fitted against 26.8.1.1's <c>svg:height</c>: <c>∑</c> with its
+    /// limits hidden is 584 units, which is 518 of glyph and 66 of padding — two borders and six units the
+    /// device's glyph rectangle adds — and <c>∫</c> then comes out 641 against a measured 643. The text-height
+    /// rule this replaced made every n-ary 3.46 pt too tall.
+    /// </para>
+    /// </remarks>
+    private static Rect Symbol(string? character, int fontHeight)
+    {
+        int height = fontHeight + fontHeight * 20 / 100;
+        height += height * DistOperatorSize / 100;
+        height = height * 686 / 845;
+
+        (int below, int above) = character switch
+        {
+            // OMML's default n-ary character is the integral.
+            null or "" or "∫" or "∬" or "∭" or "∮" or "∯" or "∰" => (295, 1616),
+            "∏" => (184, 1536),
+            "∐" => (205, 1516),
+            "⋀" or "⋁" or "⋂" or "⋃" => (0, 1365),
+            _ => (205, 1518),
+        };
+
+        // In baseline coordinates: the glyph's own bounds, a border either side, and three units the
+        // device's glyph rectangle adds at each end.
+        int border = height / 20 + 3;
+        int top = -(int)Math.Round((double)above * height / 2048) - border;
+        int bottom = (int)Math.Round((double)below * height / 2048) + border;
+
+        return new Rect(top, bottom, -height * 750 / 1000, 0, -height * 121 / 422, 0, true);
     }
 
     /// <summary>

@@ -86,7 +86,8 @@ echo "measuring $CLI" >&2
 # Which soffice is the reference. `$REF_SOFFICE` wins; otherwise whatever is on PATH.
 #
 # ANNOUNCED, because taking it from PATH silently is a trap this script fell into itself. The
-# calibration target is /opt/libreoffice26.2 and the image also carries 24.2.7.2 at /usr/bin/soffice,
+# target is the 26.8 branch daily at /opt/libreofficedev26.8 (since 2026-10-21; it was
+# /opt/libreoffice26.2 before) and the image also carries 24.2.7.2 at /usr/bin/soffice,
 # so a sweep launched without PATH pointed at the target measures the wrong reference and produces a
 # table that looks entirely normal and is not comparable to any round's figures. One whole-corpus
 # sweep -- 1285 documents, about three hours -- was scored against 24.2.7.2 that way and thrown out.

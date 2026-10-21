@@ -430,8 +430,8 @@ internal static class OdfParagraphFormats
 
         return parts[0] switch
         {
-            "super" => new Layout.Escapement(Layout.Escapement.AutomaticPercent, proportion),
-            "sub" => new Layout.Escapement(-Layout.Escapement.AutomaticPercent, proportion),
+            "super" => new Layout.Escapement(Layout.Escapement.Automatic, proportion),
+            "sub" => new Layout.Escapement(-Layout.Escapement.Automatic, proportion),
             _ => OdfValue.ParsePercentage(parts[0]) is { } percent
                 ? new Layout.Escapement((int)Math.Round(percent * 100), proportion)
                 : Layout.Escapement.None,
@@ -816,6 +816,58 @@ internal static class OdfParagraphFormats
 
     }
 
+    /// <summary>
+    /// A paragraph's <c>style:drop-cap</c>, from its style chain and then the family default, or null
+    /// when none states one.
+    /// </summary>
+    /// <remarks>
+    /// Read whole from the first level that carries the element, which is how
+    /// <c>XMLTextDropCapImportContext</c> builds its one <c>DropCapFormat</c> item
+    /// (<c>xmloff/source/text/txtdropi.cxx</c>). The lines default to one, which drops nothing, and the
+    /// length to one character; <c>style:length="word"</c> drops the paragraph's first word.
+    /// </remarks>
+    internal static OdfDropCap? DropCapOf(OdfStyles styles, string? styleName)
+    {
+        OdfStyle? current = styles.Find(styleName, OdfStyleFamily.Paragraph);
+        HashSet<string> visited = new(StringComparer.Ordinal);
+        XElement? declared = null;
+
+        for (int depth = 0; current is not null && depth < OdfStyles.MaxParentChainDepth; depth++)
+        {
+            if (current.Properties(OdfPropertyKind.Paragraph)?.Child(OdfNamespaces.Style, "drop-cap")
+                is { } found)
+            {
+                declared = found;
+                break;
+            }
+
+            if (!visited.Add(current.Name)) break;
+            current = styles.Find(current.ParentStyleName, OdfStyleFamily.Paragraph);
+        }
+
+        declared ??= styles.GetDefault(OdfStyleFamily.Paragraph)
+            ?.Properties(OdfPropertyKind.Paragraph)
+            ?.Child(OdfNamespaces.Style, "drop-cap");
+        if (declared is null) return null;
+
+        string? Value(string name) => declared.Attribute(XName.Get(name, OdfNamespaces.Style))?.Value;
+
+        int lines = int.TryParse(Value("lines"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int l)
+            ? l
+            : 1;
+        string? length = Value("length");
+        bool word = length == "word";
+        int characters = !word
+            && int.TryParse(length, NumberStyles.Integer, CultureInfo.InvariantCulture, out int c)
+                ? c
+                : 1;
+        Length distance = OdfValue.ParseLength(Value("distance")) is { } d
+            ? OdfWriterUnits.ToCore(d)
+            : Length.Zero;
+
+        return new OdfDropCap(lines, characters, word, distance, Value("style-name"));
+    }
+
     private static List<TabStop> ReadStops(XElement element)
     {
         List<TabStop> stops = [];
@@ -929,3 +981,12 @@ internal static class OdfParagraphFormats
     /// <summary>The families a list names, joined with <c>;</c> — see <see cref="OdfFontFamilies"/>.</summary>
     private static string? Unquote(string? family) => OdfFontFamilies.Parse(family);
 }
+
+/// <summary>An ODF paragraph's <c>style:drop-cap</c>.</summary>
+/// <param name="Lines"><c>style:lines</c>: how many lines the drop spans.</param>
+/// <param name="Characters"><c>style:length</c> as a count.</param>
+/// <param name="WholeWord">True for <c>style:length="word"</c>.</param>
+/// <param name="Distance"><c>style:distance</c>: the gap after the drop.</param>
+/// <param name="StyleName"><c>style:style-name</c>: the text style the dropped letters take.</param>
+internal readonly record struct OdfDropCap(
+    int Lines, int Characters, bool WholeWord, Length Distance, string? StyleName);

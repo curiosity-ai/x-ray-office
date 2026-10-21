@@ -132,13 +132,17 @@ reference's 393, exactly 52 bullets, now 393 against 393.
 - [x] Shape properties: transform (with flip **before** rotation), solid fill, line, text body.
       **Drop shadows** are drawn, in all three readers — `a:outerShdw` inline or through the
       theme's `a:effectRef`, the Escher `fShadow` group, and ODF's `draw:shadow*`. **Glow and
-      soft edge** are drawn for PPTX as 26.8.1.1 rasterises them (`SlideEffects`): a glow as one
-      bitmap, or two on a custom shape, which LibreOffice wraps twice; a soft edge only on a
-      solid fill with no outline — a softened picture or gradient is still drawn hard, because
-      its pixels are not available to this layer. Not drawn: the shadow of a glow, text glow,
-      glow and soft edge from `.ppt` and `.odp`, reflection (which 26.8.1.1 does not draw
-      either), and `a:innerShdw`, which LibreOffice also ignores
-      (`EffectProperties::pushToPropMap` acts on `outerShdw` alone).
+      soft edge** are drawn as 26.8 rasterises them (`ShapeEffects` in Core, `SlideEffects` here),
+      from PPTX and ODP (`loext:glow-*`, `loext:softedge-radius`), and also on Writer and Calc
+      DrawingML shapes: a rectangle custom shape takes them twice, every other geometry and a
+      picture once; a soft edge keeps its content's own pixels — gradient, picture, outline — through
+      the backend's `IDrawingSink.Rasterise`; the shadow casts the glow; text glow (`a:rPr` glow,
+      `loext:glow-text-*`) is drawn under the text, its radius scaled by the font size. `.ppt` has
+      no such records and the reference draws none. Not drawn: reflection (which 26.8 does not
+      draw either) and `a:innerShdw`, which LibreOffice also ignores
+      (`EffectProperties::pushToPropMap` acts on `outerShdw` alone). Not modelled: the PDF writer's
+      300 dpi downsampling of every bitmap (`pdfwriter_impl2.cxx`:118-160), which leaves a small
+      shape's or small text's glow at 720 dpi here where the reference's is resampled.
 - [x] Text bodies via the shared text layout, with insets and anchoring, including
       **shrink-to-fit**: a body stating `a:normAutofit` has its size solved from scratch, because
       the reference reads the stated `fontScale` into a field it never reads again and searches

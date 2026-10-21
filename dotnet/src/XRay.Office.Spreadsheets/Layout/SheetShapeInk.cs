@@ -95,6 +95,15 @@ internal static class SheetShapeInk
             stroked, new Stroke(Paint.Solid(line), pen > Length.Zero ? pen : HairlineWidth));
     }
 
+    /// <summary>The outline a shape is filled through, in page coordinates — what its effects are grown from.</summary>
+    public static GraphicsPath Outline(
+        DocRect box,
+        string? preset,
+        IReadOnlyDictionary<string, double>? adjustments,
+        bool flipHorizontal,
+        bool flipVertical)
+        => Outlines(box, preset, adjustments, flipHorizontal, flipVertical).Fill;
+
     /// <summary>The paint a <see cref="SheetShapeTexture"/> describes, placed on its box.</summary>
     /// <remarks>
     /// The tile grid is anchored on the shape's own origin rather than on the page's, which is

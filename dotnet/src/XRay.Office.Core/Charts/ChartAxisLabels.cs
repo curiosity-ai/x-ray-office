@@ -394,15 +394,21 @@ public static class ChartAxisLabels
             if (at >= texts.Count || texts[at] is not { Length: > 0 } text) continue;
             if (measurer.Measure(text, size, bold).Width <= limit) continue;
 
-            string[] words = text.Split(' ');
-            if (words.Length < 2) continue;
+            // The break opportunities are Words' — after a blank, which is dropped, and after a
+            // hyphen or a slash, which stays on the line it ends. EditEngine breaks a label after
+            // its hyphen as readily as at a blank: a chartex histogram's bin label `(16.19-22.39]`
+            // in a 64.8 pt slot is drawn by the 26.8 daily as `(16.19-` over `22.39]`.
+            List<(string Run, bool Spaced)> words = Runs(text);
+            if (words.Count < 2) continue;
 
             System.Text.StringBuilder built = new();
             string line = string.Empty;
+            bool spaced = false;
 
-            foreach (string word in words)
+            foreach ((string word, bool afterBlank) in words)
             {
-                string candidate = line.Length == 0 ? word : line + " " + word;
+                string candidate = line.Length == 0 ? word : line + (spaced ? " " : "") + word;
+                spaced = afterBlank;
 
                 if (line.Length > 0 && measurer.Measure(candidate, size, bold).Width > limit)
                 {
@@ -431,6 +437,39 @@ public static class ChartAxisLabels
         }
 
         return wrapped;
+    }
+
+    /// <summary>
+    /// A label's runs between break opportunities, each with whether a blank followed it.
+    /// </summary>
+    /// <remarks>
+    /// The same opportunities as <see cref="Words"/>: a blank ends a run and is not part of it, a
+    /// hyphen or a slash ends a run and is. Consecutive blanks make no empty run.
+    /// </remarks>
+    private static List<(string Run, bool Spaced)> Runs(string text)
+    {
+        List<(string, bool)> runs = [];
+        int start = 0;
+
+        for (int at = 0; at < text.Length; at++)
+        {
+            char c = text[at];
+            if (c is not (' ' or '-' or '‐' or '/')) continue;
+
+            // A leading minus sign is not a hyphen: "[-5.5" does not break after its "-".
+            if (c != ' ' && (at == 0 || !char.IsLetterOrDigit(text[at - 1]))) continue;
+
+            bool blank = c == ' ';
+            string run = blank ? text[start..at] : text[start..(at + 1)];
+
+            if (run.Length > 0) runs.Add((run, blank));
+            else if (blank && runs.Count > 0) runs[^1] = (runs[^1].Item1, true);
+
+            start = at + 1;
+        }
+
+        if (start < text.Length) runs.Add((text[start..], false));
+        return runs;
     }
 
     /// <summary>The smallest gap between two consecutive ticks.</summary>

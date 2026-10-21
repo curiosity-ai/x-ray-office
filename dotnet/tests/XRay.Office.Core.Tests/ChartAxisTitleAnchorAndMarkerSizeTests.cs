@@ -134,9 +134,11 @@ public class ChartAxisTitleAnchorAndMarkerSizeTests
     {
         ChartDrawing drawing = Place(Columns());
 
-        // The Ruler's line height for a 9 pt title, plus `ShapeFactory::createText`'s 0.30 inset
-        // above and below it -- the shape's height, which is what the arithmetic halves.
-        Length half = Length.FromPoints(((9 * 1.15) + (9 * 0.6)) / 2);
+        // The Ruler's line height for a 9 pt title, plus `ShapeFactory::createText`'s inset above
+        // and below it -- the shape's height, which is what the arithmetic halves. The inset is
+        // round(423 x 0.30) = 127 hundredths a side whatever the title's size since the 26.8
+        // retarget (2026-10-21): the daily sizes it by the model's 12 pt default.
+        Length half = (Length.FromPoints(9 * 1.15) + Length.FromMm100(127 * 2)) / 2;
         Length gap = Below(drawing).At.Y - half - drawing.DiagramArea.Bottom;
 
         Length expected = Frame.Height * 0.02;

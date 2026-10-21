@@ -302,6 +302,12 @@ public sealed record SheetDrawing
     /// <summary>The <c>a:avLst</c> the shape states, overriding the preset's own defaults.</summary>
     public IReadOnlyDictionary<string, double>? Adjustments { get; init; }
 
+    /// <summary>The glow around the drawing, or null when it has none. See <see cref="ShapeEffects"/>.</summary>
+    public ShapeGlow? Glow { get; init; }
+
+    /// <summary>The soft edge the drawing fades out over, or null when it has none.</summary>
+    public ShapeSoftEdge? SoftEdge { get; init; }
+
     /// <summary>True when the shape's geometry is mirrored across its vertical centre line.</summary>
     /// <remarks>
     /// <para>

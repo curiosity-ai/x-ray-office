@@ -143,7 +143,8 @@ public class ChartAxisHyphenationTests
     [Fact]
     public void ASuppliedFrenchDictionaryTurnsTheAxisTheSameWay()
     {
-        const string French = "/opt/libreoffice26.2/share/extensions/dict-fr/hyph_fr.dic";
+        // The reference install's copy; byte-identical to 26.2.4.2's, which the turn was measured with.
+        const string French = "/opt/libreofficedev26.8/share/extensions/dict-fr/hyph_fr.dic";
 
         Assert.SkipUnless(
             File.Exists(French),

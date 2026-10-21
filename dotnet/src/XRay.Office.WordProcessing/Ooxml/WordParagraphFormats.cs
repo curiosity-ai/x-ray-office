@@ -296,6 +296,11 @@ internal static class WordParagraphFormats
     /// <c>w:suppressAutoHyphens</c> is on, directly or through its style, is not hyphenated: dmapper maps the
     /// element to <c>ParaIsHyphenation = !value</c> (<c>DomainMapper.cxx</c>:2024-2025).
     /// </param>
+    /// <param name="statedHyphenation">
+    /// What a paragraph whose <c>w:suppressAutoHyphens</c> is stated off takes when
+    /// <paramref name="hyphenation"/> is null — the same mapping turns hyphenation <em>on</em> for it — or null
+    /// to leave such a paragraph unhyphenated.
+    /// </param>
     internal static ParagraphFormat Resolve(
         WordStyles styles,
         XElement? paragraphProperties,
@@ -303,7 +308,8 @@ internal static class WordParagraphFormats
         Length? autoSpacing = null,
         IReadOnlyList<XElement>? tableStyle = null,
         bool shrinksJustifiedBlanks = false,
-        HyphenationRules? hyphenation = null)
+        HyphenationRules? hyphenation = null,
+        HyphenationRules? statedHyphenation = null)
     {
         ArgumentNullException.ThrowIfNull(styles);
 
@@ -313,9 +319,11 @@ internal static class WordParagraphFormats
         // Attribute by attribute rather than element by element: see WordStyles.ParagraphPropertyLayers.
         List<XElement> indent =
             styles.ParagraphPropertyLayers("ind", paragraphProperties, styleId, tableStyle);
+        XElement? spacingProperties = WithLineUnitsAsTwips(paragraphProperties);
         List<XElement> spacings = GroupedMargins(
-            styles.ParagraphPropertyLayers("spacing", paragraphProperties, styleId, tableStyle),
-            paragraphProperties);
+            styles.ParagraphPropertyLayers("spacing", spacingProperties, styleId, tableStyle),
+            spacingProperties);
+        CharacterIndents chars = new(styles, indent, styleId, paragraphProperties, tableStyle);
 
         Length auto = autoSpacing ?? HtmlAutoSpacing;
 
@@ -349,17 +357,16 @@ internal static class WordParagraphFormats
             // w:start and w:left are the same attribute under two names: the first is the
             // reading-direction form ECMA-376 standardised on and the second is what Word 2007 wrote
             // and what most files in existence still carry.
-            StartIndent = Across(indent, "start", "left") ?? Length.Zero,
-            EndIndent = Across(indent, "end", "right") ?? Length.Zero,
-            FirstLineIndent = FirstLine(indent),
+            StartIndent = chars.Start ?? Across(indent, "start", "left") ?? Length.Zero,
+            EndIndent = chars.End ?? Across(indent, "end", "right") ?? Length.Zero,
+            FirstLineIndent = chars.FirstLine ?? FirstLine(indent),
 
             SpaceBefore = AutoOr(spacings, "beforeAutospacing", "before", auto),
             SpaceAfter = AutoOr(spacings, "afterAutospacing", "after", auto),
             // A table style's own `w:contextualSpacing` reaches its cells as it does in Word; 26.8.1.1
-            // drops it, and the switch reproduces that. See `TODO.word-parity.md`.
+            // drops it, and this tree deliberately does not. See `TODO.word-parity.md`.
             HasContextualSpacing =
-                IsOn(styles, paragraphProperties, styleId, "contextualSpacing",
-                     WordParity.ReproduceLibreOffice ? null : tableStyle),
+                IsOn(styles, paragraphProperties, styleId, "contextualSpacing", tableStyle),
 
             // Which style, for the "same style" half of contextual spacing. Already resolved to the
             // document's default when the paragraph names none, so two unstyled paragraphs match.
@@ -398,10 +405,9 @@ internal static class WordParagraphFormats
 
             ShrinksJustifiedBlanks = shrinksJustifiedBlanks,
 
-            Hyphenation = hyphenation is not null
-                          && !IsOn(styles, paragraphProperties, styleId, "suppressAutoHyphens", tableStyle)
-                ? hyphenation
-                : null,
+            Hyphenation = Layer(styles, paragraphProperties, styleId, "suppressAutoHyphens", tableStyle) is { } suppress
+                ? Word.IsOn(suppress) ? null : hyphenation ?? statedHyphenation
+                : hyphenation,
         };
     }
 
@@ -658,7 +664,7 @@ internal static class WordParagraphFormats
             italic.IsOn,
             Word.Attribute(language.Element, "val"),
             WordThemeColour.Read(colour.Element, theme),
-            EscapementOf(vertical.Element),
+            EscapementOf(styles, vertical, runProperties, styleId, characterStyleId, resolvedSize),
             // Both are toggles and both are the same item, so the two cannot combine: Word writes at most
             // one of them per layer, and full capitals win where a file states both — which is what
             // `SvxCaseMapItem` holding a single value forces on any reader.
@@ -834,6 +840,85 @@ internal static class WordParagraphFormats
     /// <c>sub</c> keywords do, and which LibreOffice imports as the same item. <c>baseline</c> is the third
     /// value and means neither, which is also what an absent element means.
     /// </remarks>
+    private static Layout.Escapement EscapementOf(
+        WordStyles styles,
+        WordProperty vertical,
+        XElement? runProperties,
+        string? styleId,
+        string? characterStyleId,
+        Length size)
+    {
+        // A run's own `w:position` is deferred until the run's text is appended
+        // (`DomainMapper.cxx`:2434-2439), so it wins over a `w:vertAlign` beside it, which is applied as it
+        // is read. Zero is "the lack of the value" and is not parsed at all.
+        if (PositionOf(Word.Child(runProperties, "position")) is { } halves)
+        {
+            return Positioned(halves, size);
+        }
+
+        if (vertical.Origin == WordPropertyOrigin.Direct) return EscapementOf(vertical.Element);
+
+        // A style's: the character style's chain beats the paragraph style's, as every run property's does.
+        return StyleEscapement(characterStyleId, WordStyleType.Character)
+               ?? StyleEscapement(styleId, WordStyleType.Paragraph)
+               ?? EscapementOf(vertical.Element);
+
+        Layout.Escapement? StyleEscapement(string? id, WordStyleType type)
+        {
+            WordStyle? current = styles.Find(id, type);
+            HashSet<string> visited = new(StringComparer.Ordinal);
+
+            for (int depth = 0; current is not null && depth < 32; depth++)
+            {
+                // `w:vertAlign` follows `w:position` in `CT_RPr`, so where one style states both the
+                // later insert is the one the item keeps.
+                if (Word.Child(current.RunProperties, "vertAlign") is { } align) return EscapementOf(align);
+
+                if (PositionOf(Word.Child(current.RunProperties, "position")) is { } stated)
+                {
+                    // `DomainMapper.cxx`:2440-2464: a style's offset cannot be a percentage of a size not
+                    // yet known, so it becomes the automatic pair — except a paragraph style's negative
+                    // one, which is deferred like a run's and reaches the style's own size.
+                    return type == WordStyleType.Paragraph && stated < 0
+                        ? Positioned(stated, size)
+                        : stated > 0 ? Layout.Escapement.Superscript : Layout.Escapement.Subscript;
+                }
+
+                if (!visited.Add(current.StyleId)) break;
+                current = styles.Find(current.BasedOn, type);
+            }
+
+            return null;
+        }
+    }
+
+    /// <summary>A non-zero <c>w:position</c>, in half-points, or null.</summary>
+    private static int? PositionOf(XElement? position)
+        => Word.Integer(Word.Attribute(position, "val"), out int halves) && halves != 0 ? halves : null;
+
+    /// <summary>
+    /// A half-point offset as the escapement writerfilter makes of it.
+    /// </summary>
+    /// <remarks>
+    /// <c>round(halves / 2 / size × 100)</c> per cent at full size, clamped to <c>MAX_ESC_POS</c>
+    /// (<c>DomainMapper.cxx</c>:3997-4019) — rounded, where WW8's <c>sprmCHpsPos</c> truncates. The
+    /// percentage is then of the face's height like any escapement's: measured on the 26.8 daily, 6
+    /// half-points at 12 pt Liberation Serif raise the run 3.45 pt (25 % of its 13.8 pt height) and 3
+    /// half-points 1.75 (13 %, from 12.5 rounded away from zero).
+    /// </remarks>
+    private static Layout.Escapement Positioned(int halves, Length size)
+    {
+        double points = size.Points;
+        if (points <= 0) return halves > 0 ? Layout.Escapement.Superscript : Layout.Escapement.Subscript;
+
+        double percent = Math.Round(halves / 2.0 / points * 100, MidpointRounding.AwayFromZero);
+        int clamped = (int)Math.Clamp(percent, -MaxEscapement, MaxEscapement);
+        return clamped == 0 ? Layout.Escapement.None : new Layout.Escapement(clamped, 100);
+    }
+
+    /// <summary><c>MAX_ESC_POS</c>, <c>include/editeng/escapementitem.hxx</c>:31.</summary>
+    private const int MaxEscapement = 13999;
+
     private static Layout.Escapement EscapementOf(XElement? vertAlign) =>
         Word.Attribute(vertAlign, "val") switch
         {
@@ -977,6 +1062,160 @@ internal static class WordParagraphFormats
         "distribute" => TextAlignment.Distribute,
         _ => TextAlignment.Start,
     };
+
+    /// <summary>
+    /// A paragraph's <c>w:spacing</c> with <c>w:beforeLines</c> and <c>w:afterLines</c> turned into the
+    /// twips they stand for, or the properties unchanged when they state neither.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>DomainMapper</c> (<c>sw/source/writerfilter/dmapper/DomainMapper.cxx</c>:527-534, 551-558) maps a
+    /// hundredth of a line to <c>nIntValue * 240 / 100</c> twips — a line is a fixed 240, whatever the font —
+    /// and does it on a paragraph only: under a style import the two are ignored. The insert does not
+    /// overwrite, and a <c>w:before</c> or <c>w:after</c> stated beside it wins in either attribute order
+    /// (measured, <c>probes/words-indentchars/</c>: <c>before="0" beforeLines="100"</c> and the reverse both
+    /// draw no space, <c>beforeLines="100"</c> alone draws 12 pt and <c>"33"</c> 3.95 pt).
+    /// </para>
+    /// <para>
+    /// Because the value then sits in the paragraph's own context, it also beats a style's <c>w:before</c>,
+    /// which is why it becomes an attribute of the paragraph's own element here rather than a layer of its
+    /// own.
+    /// </para>
+    /// </remarks>
+    private static XElement? WithLineUnitsAsTwips(XElement? paragraphProperties)
+    {
+        XElement? spacing = Word.Child(paragraphProperties, "spacing");
+        if (spacing is null) return paragraphProperties;
+
+        string? before = Word.Attribute(spacing, "before") is null ? Word.Attribute(spacing, "beforeLines") : null;
+        string? after = Word.Attribute(spacing, "after") is null ? Word.Attribute(spacing, "afterLines") : null;
+        if (before is null && after is null) return paragraphProperties;
+
+        XElement copy = new(paragraphProperties!);
+        XElement converted = Word.Child(copy, "spacing")!;
+
+        if (before is not null && Word.Integer(before, out int beforeLines))
+            converted.SetAttributeValue(Word.Name("before"), LineUnitTwips(beforeLines));
+        if (after is not null && Word.Integer(after, out int afterLines))
+            converted.SetAttributeValue(Word.Name("after"), LineUnitTwips(afterLines));
+
+        return copy;
+
+        // `convertTwipToMm100_Limited(n * 240 / 100)`: integer division, and a result of 32768 twips or
+        // more is nought. The hundredths of a millimetre go back to twips unchanged at these sizes.
+        static long LineUnitTwips(int lines)
+        {
+            long twips = lines * 240L / 100;
+            return twips >= 0x8000 ? 0 : twips;
+        }
+    }
+
+    /// <summary>
+    /// The three indents a paragraph states in characters — <c>w:leftChars</c>/<c>w:startChars</c>,
+    /// <c>w:rightChars</c>/<c>w:endChars</c>, <c>w:firstLineChars</c>/<c>w:hangingChars</c> — each null where
+    /// the twips version decides.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A character is the paragraph's East Asian font height: <c>SvxIndentValue::ResolveDouble</c> multiplies
+    /// by <c>m_dIcTwips</c> (<c>editeng/source/items/frmitems.cxx</c>:292-312), which
+    /// <c>SwFont::GetFontUnitMetrics</c> takes from the CJK height of the font the margins are computed with
+    /// (<c>sw/source/core/txtnode/swfont.cxx</c>:345-353, <c>itrcrsr.cxx</c>:170), and the result is rounded
+    /// to a twip. That font is the paragraph's style, not its runs or its mark: measured, a run or a mark at
+    /// 16 pt in a 10.5 pt style still indents two characters by 21 pt, and a 20 pt style by 40.
+    /// </para>
+    /// <para>
+    /// The rules are writerfilter's, which DOCX's own (tdf#83844) shaped: a non-zero count beats the twips
+    /// attribute at every level, even when only inherited (<c>DomainMapper.cxx</c>:571-604 re-insert it); a
+    /// count of nought <em>disables</em> the count, so the twips value — stated or inherited — applies after
+    /// all (<c>DomainMapper_Impl.cxx</c>:3141-3236, <c>StyleSheetTable.cxx</c>:1294-1405); and a hanging
+    /// count stated on the paragraph moves its left indent to the left count plus the hanging one, ignoring
+    /// a <c>w:left</c> (tdf#167721) — on a style it does so only beside a left count.
+    /// </para>
+    /// <para>
+    /// <strong>A table style's paragraph properties are the exception, and it is measured.</strong> They
+    /// reach the cell's paragraph without either fix-up, so the count's unit property is applied after the
+    /// twips one and wins even at nought: a table style stating <c>w:rightChars="0" w:right="374"</c> draws no
+    /// right indent at all, where a paragraph style stating the same keeps the 374 twips
+    /// (<c>probes/words-indentchars/</c>, cases <c>t01</c>, <c>t02</c> and <c>i18</c>). That is the
+    /// right-aligned first column of <c>docx/word_sample.docx</c>'s <c>Report Table</c>.
+    /// </para>
+    /// </remarks>
+    private readonly struct CharacterIndents
+    {
+        public CharacterIndents(
+            WordStyles styles,
+            List<XElement> indent,
+            string? styleId,
+            XElement? paragraphProperties,
+            IReadOnlyList<XElement>? tableStyle)
+        {
+            XElement? direct = Word.Child(paragraphProperties, "ind");
+            HashSet<XElement> fromTable = new(ReferenceEqualityComparer.Instance);
+            if (tableStyle is not null)
+            {
+                foreach (XElement properties in tableStyle)
+                {
+                    if (Word.Child(properties, "ind") is { } found) fromTable.Add(found);
+                }
+            }
+
+            (double? start, _) = Count(indent, fromTable, "startChars", "leftChars");
+            (double? end, _) = Count(indent, fromTable, "endChars", "rightChars");
+            (double? first, XElement? firstLayer) = Count(indent, fromTable, "hangingChars", "firstLineChars");
+
+            if (start is null && end is null && first is null) return;
+
+            // `ParaFirstLineIndentUnit` is negative for a hanging count: `nIntValue / -100.0`.
+            if (first is { } hanging && hanging < 0
+                && (ReferenceEquals(firstLayer, direct) || start is not null))
+            {
+                start = (start ?? 0) - hanging;
+            }
+
+            WordProperty size = styles.ResolveRunProperty("sz", null, styleId, null);
+            long ic = Word.Integer(size.Value, out int halfPoints) ? halfPoints * 10L : 200;
+
+            Start = Of(start, ic);
+            End = Of(end, ic);
+            FirstLine = Of(first, ic);
+        }
+
+        public Length? Start { get; }
+
+        public Length? End { get; }
+
+        public Length? FirstLine { get; }
+
+        private static Length? Of(double? count, long ic)
+            => count is { } value ? Length.FromTwips((long)Math.Round(value * ic, MidpointRounding.AwayFromZero)) : null;
+
+        /// <summary>
+        /// The innermost count in force for one side, in characters, and the layer it came from — or null when
+        /// the twips attribute decides: none is stated, or the innermost stated one is a nought that disables
+        /// the rest.
+        /// </summary>
+        /// <remarks>
+        /// The first-line pair is one property under two names, a hanging count read as its negation.
+        /// </remarks>
+        private static (double? Count, XElement? Layer) Count(
+            List<XElement> layers, HashSet<XElement> fromTable, string first, string second)
+        {
+            foreach (XElement layer in layers)
+            {
+                string? text = Word.Attribute(layer, first) ?? Word.Attribute(layer, second);
+                if (text is null || !Word.Integer(text, out int hundredths)) continue;
+
+                bool negated = first == "hangingChars" && Word.Attribute(layer, first) is not null;
+                double count = (negated ? -hundredths : hundredths) / 100.0;
+
+                if (hundredths == 0 && !fromTable.Contains(layer)) return (null, layer);
+                return (count, layer);
+            }
+
+            return (null, null);
+        }
+    }
 
     /// <summary>
     /// The first line's extra indent, which OOXML states as one of two mutually exclusive attributes.

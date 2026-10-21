@@ -83,6 +83,21 @@ namespace XRay.Office.Text.Layout;
 /// the family class and the language the glyph-fallback pattern is built with; see
 /// <see cref="Fonts.FontItem"/>.
 /// </param>
+/// <param name="Rise">
+/// How far the run is drawn above its baseline, negative below, when it is escaped; zero otherwise.
+/// Only the line's measurement reads it here — see <paramref name="UnescapedEmSize"/>.
+/// </param>
+/// <param name="UnescapedEmSize">
+/// The size the run would take were it not escaped, or zero for a run that is not raised or lowered.
+/// <para>
+/// An escaped portion is measured by Writer's own rule, not as text at its shrunk size:
+/// <c>SwSubFont::CalcEscAscent</c> makes its ascent <c>max(A₂ + rise, A₁)</c> and <c>CalcEscHeight</c> its
+/// descent <c>max(H₂ − A₂ − rise, H₁ − A₁)</c>, where the subscripts are the shrunk and the unshrunk font
+/// (<c>sw/source/core/txtnode/swfont.cxx</c>:495-506 and :965-978). So a raised run grows the line's
+/// ascent by its rise, a lowered one its descent, and even a shrunk one never measures shorter than the
+/// font it was shrunk from. An automatic rise is the case where both maxima land on the unshrunk font.
+/// </para>
+/// </param>
 public readonly record struct FormattedRun(
     int Start,
     int Length,
@@ -92,7 +107,9 @@ public readonly record struct FormattedRun(
     Length MetricEmSize = default,
     Length Tracking = default,
     int WidthPerCent = 100,
-    Fonts.FontItem Item = default)
+    Fonts.FontItem Item = default,
+    Length Rise = default,
+    Length UnescapedEmSize = default)
 {
     /// <summary>One past the run's last character.</summary>
     public int End => Start + Length;
@@ -367,6 +384,10 @@ public sealed class MeasuredParagraph
     /// Whether a script change with East Asian text on one side widens the text by a fifth of the em.
     /// True for a document that came from Word; see <see cref="ScriptSpacing"/>.
     /// </param>
+    /// <param name="characterGrid">
+    /// The page's character grid when the paragraph snaps to one, or null. Every East Asian cluster takes
+    /// the cell <see cref="CharacterGrid.Cell"/> gives it instead of its own advance.
+    /// </param>
     public static MeasuredParagraph Measure(
         string text,
         IReadOnlyList<FormattedRun> runs,
@@ -376,7 +397,8 @@ public sealed class MeasuredParagraph
         MetricGrid? grid = null,
         bool blanksAreTransparentToHeight = false,
         bool leadingAboveText = false,
-        bool addsScriptSpace = false)
+        bool addsScriptSpace = false,
+        CharacterGrid? characterGrid = null)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(runs);
@@ -500,6 +522,29 @@ public sealed class MeasuredParagraph
         for (int i = 1; i <= text.Length; i++)
         {
             if (prefix[i] < prefix[i - 1]) prefix[i] = prefix[i - 1];
+        }
+
+        // The character grid replaces each East Asian cluster's own advance with its cell, from the
+        // shaped advances alone: Writer's kern array is the device's text array, before the character
+        // spacing, the objects and the script gaps below are added to it. A zero-width character is part
+        // of the cluster before it and takes no cell of its own (`rKernArray[i] == rKernArray[nLast]`,
+        // `justify.cxx`:191-192).
+        if (characterGrid is { } cells)
+        {
+            bool[] asian = CharacterGrid.AsianCharacters(text);
+            long shift = 0;
+            long previous = prefix[0];
+
+            for (int i = 0; i < text.Length; i++)
+            {
+                long advance = prefix[i + 1] - previous;
+                previous = prefix[i + 1];
+
+                if (asian[i] && advance > 0)
+                    shift += cells.Cell(Length.FromEmu(advance)).Emu - advance;
+
+                prefix[i + 1] += shift;
+            }
         }
 
         // Tracking is charged for the gap *before* each character, so the first pays nothing and a
@@ -1151,6 +1196,25 @@ public sealed class MeasuredParagraph
         // eventually move a line onto a different page.
         Length runHeight = Length.FromTwips(run.Metrics.ScaledLineHeight(run.Run.LineEmSize).Twips);
         Length runAscent = Length.FromTwips(run.Metrics.ScaledAscent(run.Run.LineEmSize).Twips);
+
+        // An escaped portion: Writer's CalcEscAscent and CalcEscHeight, over the shrunk font's metrics
+        // (just measured) and the unshrunk font's. See FormattedRun.UnescapedEmSize.
+        if (run.Run.UnescapedEmSize > Length.Zero)
+        {
+            Length original = Length.FromTwips(run.Metrics.ScaledLineHeight(run.Run.UnescapedEmSize).Twips);
+            Length originalAscent = Length.FromTwips(run.Metrics.ScaledAscent(run.Run.UnescapedEmSize).Twips);
+
+            Length raised = runAscent + run.Run.Rise;
+            Length escapedAscent = raised > Length.Zero ? Length.Max(raised, originalAscent) : originalAscent;
+
+            Length lowered = runHeight - runAscent - run.Run.Rise;
+            Length escapedDescent = lowered > Length.Zero
+                ? Length.Max(lowered, original - originalAscent)
+                : original - originalAscent;
+
+            runAscent = escapedAscent;
+            runHeight = escapedAscent + escapedDescent;
+        }
 
         height = Length.Max(height, runHeight);
         ascent = Length.Max(ascent, runAscent);
