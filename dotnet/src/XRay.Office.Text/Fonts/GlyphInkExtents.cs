@@ -47,6 +47,23 @@ public static class GlyphInkExtents
     /// Null when the face carries no <c>glyf</c> outlines or the record is malformed.
     /// </returns>
     public static (int Above, int Below)? Of(OpenTypeFace? face, ushort glyphId)
+        => Box(face, glyphId) is { } box ? (Math.Max(0, box.Top), Math.Max(0, -box.Bottom)) : null;
+
+    /// <summary>
+    /// The vertical extent of one glyph's box, signed, in the face's design units, or null when it cannot
+    /// be read.
+    /// </summary>
+    /// <remarks>
+    /// Unlike <see cref="Of"/>, the ends are not clamped to the baseline: a drop cap's size is measured
+    /// from a bound rectangle that, for a quotation mark, lies wholly above it.
+    /// </remarks>
+    /// <param name="face">The face to read.</param>
+    /// <param name="glyphId">The glyph index within that face.</param>
+    /// <returns>
+    /// <c>yMax</c> and <c>yMin</c>, both zero for a glyph with no contours; null when the face carries no
+    /// <c>glyf</c> outlines or the record is malformed.
+    /// </returns>
+    public static (int Top, int Bottom)? Box(OpenTypeFace? face, ushort glyphId)
     {
         if (!CanMeasure(face) || face is null) return null;
 
@@ -68,7 +85,7 @@ public static class GlyphInkExtents
         int yMin = BinaryPrimitives.ReadInt16BigEndian(glyph[4..]);
         int yMax = BinaryPrimitives.ReadInt16BigEndian(glyph[8..]);
 
-        return (Math.Max(0, yMax), Math.Max(0, -yMin));
+        return (yMax, yMin);
     }
 
     /// <summary>Whether <c>loca</c> gives this glyph a zero-length record.</summary>

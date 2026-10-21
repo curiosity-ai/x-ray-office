@@ -367,6 +367,7 @@ public sealed partial class DocxLayoutSource
         _indexFieldDepth = 0;
         _sectionLeftMargins = LeftMargins(body);
         _sectionGridPitches = GridPitches(body);
+        _textWidth = TextWidthOf(body);
 
         // Before the walk, because a REF may name a bookmark the walk has not reached yet -- which in
         // a document whose references point forward is most of them. See `DocxReferenceFields`.
@@ -392,6 +393,7 @@ public sealed partial class DocxLayoutSource
         }
 
         SuppressAutoSpacingInLists(blocks);
+        blocks = LiftParagraphFrames(blocks);
 
         // The first-section arm of the rule `SuppressAutoSpacingInShape` ports: the document's first
         // paragraph takes no HTML auto margin either (`DomainMapper_Impl.cxx`:2461). Measured on an
@@ -642,6 +644,11 @@ public sealed partial class DocxLayoutSource
             List<PageBlock> blocks = [];
             Walk(element, blocks, depth: 0);
             SuppressAutoSpacingInLists(blocks);
+
+            // A running head's framed paragraphs are framed too: measured on the 26.8 daily, a
+            // `w:framePr` paragraph in a header is placed against the header's column like a body one.
+            // A text box's content comes through here as well, and there writerfilter frames nothing.
+            if (InHeaderFooter && _frameDepth == 0) blocks = LiftParagraphFrames(blocks);
             ParagraphBorderJoin.Apply(blocks);
             return blocks;
         }
@@ -678,6 +685,37 @@ public sealed partial class DocxLayoutSource
     /// before a page exists. A section stating no <c>w:pgMar</c> gets Letter's inch, which is what
     /// <c>SectionPropertyMap</c>'s constructor gives it — see <see cref="PageGeometry.Letter"/>.
     /// </remarks>
+    /// <summary>The first section's text width, which a drop cap's line count is decided at.</summary>
+    private Length _textWidth = Length.FromTwips(9360);
+
+    /// <summary>The first section's text width: <c>w:pgSz/@w:w</c> less the two side margins.</summary>
+    private static Length TextWidthOf(XElement body)
+    {
+        XElement? section = body.Descendants(Word.Name("sectPr")).FirstOrDefault();
+        Length width = Twips(Word.Child(section, "pgSz"), "w") ?? PageGeometry.Letter.Size.Width;
+        Length left = Twips(Word.Child(section, "pgMar"), "left") ?? PageGeometry.Letter.Margins.Left;
+        Length right = Twips(Word.Child(section, "pgMar"), "right") ?? PageGeometry.Letter.Margins.Right;
+        Length text = width - left - right;
+        return text > Length.Zero ? text : Length.FromTwips(9360);
+    }
+
+    /// <summary>
+    /// Takes the flow's <c>w:framePr</c> paragraphs out of it and hangs them on their anchors as
+    /// frames, and sets each drop cap into the paragraph after it.
+    /// </summary>
+    /// <remarks>
+    /// After the walk rather than during it, because a run of framed paragraphs is delimited by the
+    /// paragraph <em>after</em> it, and before the border join, because once the frames are out the
+    /// paragraphs either side of them are neighbours. See <see cref="ParagraphFrames"/> and
+    /// <see cref="DocxParagraphFrames"/>.
+    /// </remarks>
+    private List<PageBlock> LiftParagraphFrames(List<PageBlock> blocks)
+        => ParagraphFrames.Lift(
+            blocks,
+            paragraph => DocxParagraphFrames.RequestOf(paragraph.Source as XElement, _styles),
+            widensForBorderSpacing: true,
+            _textWidth);
+
     private static List<Length> LeftMargins(XElement body)
         => [.. body
             .Descendants(Word.Name("sectPr"))
