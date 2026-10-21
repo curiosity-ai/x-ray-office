@@ -1305,6 +1305,10 @@ public static partial class ChartLayout
 
         if (plot.PlotBackground is { } wall) boxes.Add(new ChartBox(area, wall));
 
+        // Where the axes' labels begin and end in `labels`, for the rectangle a chart that states
+        // its own inner plot area centres its axis titles on — see DiagramPlusAxes.
+        int axisLabelsFrom = labels.Count;
+
         if (plot.HasAxes)
         {
             AddValueAxis(
@@ -1328,6 +1332,8 @@ public static partial class ChartLayout
         {
             AddRadarAxis(plot, area, scale, categories, lines, labels);
         }
+
+        int axisLabelsTo = labels.Count;
 
         // Every plot group is drawn, not only the first, and the order is back to front: areas
         // fill, bars sit on them, lines go over both. A part holding a c:barChart and a
@@ -1404,7 +1410,13 @@ public static partial class ChartLayout
                 labels);
         }
 
-        AddTitles(plot, frame, area, DiagramAreaOf(plot, frame, measurer), measurer, labels);
+        AddTitles(
+            plot,
+            frame,
+            area,
+            DiagramPlusAxes(plot, frame, area, labels, axisLabelsFrom, axisLabelsTo, measurer),
+            measurer,
+            labels);
         AddLegend(plot, frame, area, measurer, boxes, lines, labels, shapes);
 
         return new ChartDrawing(
@@ -4786,12 +4798,69 @@ public static partial class ChartLayout
             IsBold: plot.IsDataLabelBold));
     }
 
+    /// <summary>
+    /// The rectangle the axis titles are placed against: the diagram with its axes.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>aUsedOuterRect</c> in <c>ChartView::impl_createDiagramAndContent</c>
+    /// (<c>chart2/source/view/main/ChartView.cxx:726-732</c> at tag 26.8.1.1), which
+    /// <c>changePositionOfAxisTitle</c> then centres every auto-positioned axis title on. It has
+    /// two arms, decided by <c>mbUseFixedInnerSize</c>. A chart that leaves its inner rectangle
+    /// to be computed gets the remaining space itself — what the titles and the legend left,
+    /// less the two per cent — or the outer rectangle a BIFF chart states, which
+    /// <c>getAvailablePosAndSizeForDiagram</c> puts in its place.
+    /// </para>
+    /// <para>
+    /// A chart that states its <em>inner</em> rectangle (<c>c:layoutTarget val="inner"</c>, ODF's
+    /// <c>chart:coordinate-region</c>) gets the bounding box of the diagram group once its axes
+    /// are drawn (<c>aConsumedOuterRect</c>, <c>:580-593</c>): the plot area and its axes'
+    /// labels, and nothing else, since the series are created after it is taken. The remaining
+    /// space has nothing to do with where such a plot is, and centring on it put the category
+    /// title of a probe with an inner layout at 60 % of the frame's height 25.7 pt below the
+    /// reference's. Measured on that probe, 26.8.1.1's titles sit against the labels' own text
+    /// boxes — the left one 112.6 pt across against the widest value label's 112.7, the bottom
+    /// one at 315.8 against the category labels' 315.8 — so the labels count at their text
+    /// extent, as <see cref="LabelExtent"/> gives it.
+    /// </para>
+    /// </remarks>
+    private static DocRect DiagramPlusAxes(
+        ChartPlot plot,
+        DocRect frame,
+        DocRect area,
+        List<ChartLabel> labels,
+        int axisLabelsFrom,
+        int axisLabelsTo,
+        ChartText measurer)
+    {
+        if (plot.PlotArea is null && plot.PlotAreaFraction is null)
+            return StatedOuterArea(plot, frame) ?? DiagramAreaOf(plot, frame, measurer);
+
+        Length left = area.Left;
+        Length top = area.Top;
+        Length right = area.Right;
+        Length bottom = area.Bottom;
+
+        for (int i = axisLabelsFrom; i < axisLabelsTo && i < labels.Count; i++)
+        {
+            if (LabelExtent(labels[i], measurer, plot.IsLabelBold) is not { } extent) continue;
+
+            left = Length.Min(left, extent.Left);
+            top = Length.Min(top, extent.Top);
+            right = Length.Max(right, extent.Right);
+            bottom = Length.Max(bottom, extent.Bottom);
+        }
+
+        return new DocRect(left, top, right - left, bottom - top);
+    }
+
     /// <summary>The chart's title and its two axis titles.</summary>
     /// <remarks>
     /// Each is centred on what it names — the title on the whole frame, the category axis' title
-    /// on the plot area's width, the value axis' on its height — which is
+    /// on the diagram-plus-axes rectangle's width, the value axis' on its height — which is
     /// <c>changePositionOfAxisTitle</c> (<c>ChartView.cxx:995-1046</c>) once the anchor is
-    /// resolved to a rectangle. The value axis' title is rotated a quarter turn anticlockwise,
+    /// resolved to a rectangle. <paramref name="diagram"/> is that rectangle: the remaining space,
+    /// or the outer rectangle a BIFF chart states. The value axis' title is rotated a quarter turn anticlockwise,
     /// which both formats state and neither leaves to the renderer.
     /// </remarks>
     private static void AddTitles(
@@ -4909,15 +4978,32 @@ public static partial class ChartLayout
                 IsBold: plot.IsAxisTitleBold));
         }
 
+        // The two titles beside the plot are moved by the same `changePositionOfAxisTitle`, and
+        // in 26.2.4.2 and 26.8.1.1 alike its `ALIGN_LEFT` and `ALIGN_RIGHT` arms centre the title
+        // on the diagram-plus-axes rectangle's height and set it `pageWidth * 0.02` outside that
+        // rectangle's edge (`ChartView.cxx:1016-1023` at tag 26.8.1.1), clamped so that it stays
+        // on the page (`:1029-1040`). That rectangle is `aUsedOuterRect`, which for a chart
+        // that does not state its inner rectangle is the remaining space itself (`:726-735`) —
+        // `diagram` here — and so includes the category labels' band under the plot.
+        //
+        // Master since tdf#159450 (`f7421e4df0a3`, not in 26.8.1.1) centres the two on the plot
+        // area excluding the axes instead, which is what this drew: on `chart-bar-deck.pptx`
+        // the value title came out 4.1 pt high and 3.9 pt left of 26.8.1.1's. The rotated
+        // title's width is its shape's height, insets included, as `getFinalSize` reports it.
+        Length besideWidth(string text) =>
+            Shape(measurer, text, plot.AxisTitleSize, plot.IsAxisTitleBold).Height;
+        Length sideCentreY = diagram.Y + diagram.Height / 2;
+
         if (beside is { Length: > 0 } side)
         {
-            Length height =
-                measurer.Measure(side, plot.AxisTitleSize, plot.IsAxisTitleBold).Height;
+            Length width = besideWidth(side);
             labels.Add(new ChartLabel(
                 side,
                 new DocPoint(
-                    frame.X + (frame.Width * PageMargin) + height / 2,
-                    area.Y + area.Height / 2),
+                    Length.Max(
+                        diagram.X - width / 2 - (frame.Width * PageMargin),
+                        frame.X + width / 2),
+                    sideCentreY),
                 ChartLabelAnchor.Centre,
                 plot.AxisTitleSize,
                 plot.AxisTitleColour,
@@ -4934,13 +5020,14 @@ public static partial class ChartLayout
         // title that is not on the page — the failure that looks like nothing being wrong.
         if (plot.SecondaryValueAxisTitle is { Length: > 0 } second && plot.SecondaryAxisVisible)
         {
-            Length height =
-                measurer.Measure(second, plot.AxisTitleSize, plot.IsAxisTitleBold).Height;
+            Length width = besideWidth(second);
             labels.Add(new ChartLabel(
                 second,
                 new DocPoint(
-                    frame.Right - (frame.Width * PageMargin) - height / 2,
-                    area.Y + area.Height / 2),
+                    Length.Min(
+                        diagram.Right + width / 2 + (frame.Width * PageMargin),
+                        frame.Right - width / 2),
+                    sideCentreY),
                 ChartLabelAnchor.Centre,
                 plot.AxisTitleSize,
                 plot.AxisTitleColour,
