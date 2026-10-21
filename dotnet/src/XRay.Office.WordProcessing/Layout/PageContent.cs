@@ -340,6 +340,21 @@ public sealed record PageParagraph : PageBlock
     public bool HasScriptSpace
         => _hasScriptSpace ??= AddsScriptSpace && ScriptSpacing.Boundaries(Text).Count > 0;
 
+    private bool[]? _gridCharacters;
+
+    /// <summary>
+    /// Which characters the page's character grid reaches, or null when the paragraph is on none.
+    /// </summary>
+    /// <remarks>
+    /// The third reason a paragraph cannot take the single-face shortcut, for the same reason as
+    /// <see cref="HasScriptSpace"/>: the cells are widths the prefix table carries. See
+    /// <see cref="CharacterGrid"/>.
+    /// </remarks>
+    public bool[]? GridCharacters
+        => Format.TextGrid?.Characters is null
+            ? null
+            : _gridCharacters ??= CharacterGrid.AsianCharacters(Text);
+
     /// <summary>
     /// The device grid the paragraph's fonts are measured through.
     /// </summary>
@@ -435,8 +450,8 @@ public sealed record PageParagraph : PageBlock
     /// </para>
     /// <para>
     /// Set by the DOCX reader for a document stating <c>w:compat/w:ulTrailSpace</c>, which is
-    /// <c>MS_WORD_UL_TRAIL_SPACE</c>. Native ODF, whose trailing blanks Writer keeps by default, wants it
-    /// too and is not set here.
+    /// <c>MS_WORD_UL_TRAIL_SPACE</c>, and by the ODT reader from the two settings that spell the same pair
+    /// (<c>OdtLayoutSource.DecoratesTrailingBlank</c>), which a native ODF document leaves at decorating.
     /// </para>
     /// </remarks>
     public bool DecoratesTrailingBlank { get; init; }
@@ -746,7 +761,8 @@ public sealed record PageParagraph : PageBlock
 
         return MeasuredParagraph.Measure(
             Text, runs, shaper: null, Itemisation, MeasurementObjects(), metrics,
-            BlanksAreTransparentToHeight, WriterLineBox.LeadingAboveText, AddsScriptSpace);
+            BlanksAreTransparentToHeight, WriterLineBox.LeadingAboveText, AddsScriptSpace,
+            Format.TextGrid?.Characters);
     }
 
     /// <summary>

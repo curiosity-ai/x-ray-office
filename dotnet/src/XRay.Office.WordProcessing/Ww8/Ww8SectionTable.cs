@@ -58,7 +58,12 @@ internal static class Ww8SectionTable
     /// </summary>
     /// <param name="descriptors">The <c>PlcfSed</c>, already parsed with the right record size.</param>
     /// <param name="wordDocument">The <c>WordDocument</c> stream, where the property sets live.</param>
-    internal static List<WritingSection> Read(Ww8Plcf descriptors, ReadOnlyMemory<byte> wordDocument)
+    /// <param name="documentFontSize">
+    /// The default paragraph style's font size, which a character grid's pitch starts from; see
+    /// <see cref="GridOf"/>.
+    /// </param>
+    internal static List<WritingSection> Read(
+        Ww8Plcf descriptors, ReadOnlyMemory<byte> wordDocument, Length documentFontSize = default)
     {
         List<WritingSection> sections = [];
 
@@ -75,7 +80,7 @@ internal static class Ww8SectionTable
             }
 
             uint at = BinaryPrimitives.ReadUInt32LittleEndian(descriptor[PropertiesOffsetAt..]);
-            sections.Add(ReadProperties(PropertiesAt(wordDocument, at)));
+            sections.Add(ReadProperties(PropertiesAt(wordDocument, at), documentFontSize));
         }
 
         ResolveContinuousBreaks(sections);
@@ -146,6 +151,12 @@ internal static class Ww8SectionTable
             if (!SameSheet(section.Page, carried))
             {
                 sections[i] = section with { Break = SectionBreak.NextPage };
+            }
+            else
+            {
+                // A text section has no page style of its own, and the grid is the page style's
+                // (`SetDocumentGrid` is applied to the page format, `ww8par.cxx`:4308).
+                sections[i] = section with { TextGrid = sections[i - 1].TextGrid };
             }
         }
     }
@@ -255,8 +266,12 @@ internal static class Ww8SectionTable
     /// </remarks>
     private static readonly Length DefaultColumnGap = Length.FromTwips(708);
 
-    internal static WritingSection ReadProperties(ReadOnlyMemory<byte> grpprl)
+    internal static WritingSection ReadProperties(ReadOnlyMemory<byte> grpprl, Length documentFontSize = default)
     {
+        int gridType = 0;
+        int? linePitch = null;
+        int charSpace = 0;
+
         PageGeometry page = PageGeometry.Default;
         PageMargins margins = PageMargins.Default;
         DocSize size = page.Size;
@@ -399,6 +414,16 @@ internal static class Ww8SectionTable
                     restartAt = sprm.DoubleWord;
                     break;
 
+                case Sprms.GridType:
+                    gridType = sprm.Word;
+                    break;
+                case Sprms.LinePitch:
+                    linePitch = sprm.SignedWord;
+                    break;
+                case Sprms.CharacterSpace:
+                    charSpace = unchecked((int)sprm.DoubleWord);
+                    break;
+
                 case Sprms.PageNumberFormat:
                     // sep.nfcPgn: 0 arabic, 1 I II III, 2 i ii iii, 3 A B C, 4 a b c. LibreOffice's
                     // own table (`wwSectionManager::SetNumberingType`, ww8par6.cxx:841) is exactly this,
@@ -442,6 +467,7 @@ internal static class Ww8SectionTable
             },
 
             Break = sectionBreak,
+            TextGrid = GridOf(gridType, linePitch, charSpace, documentFontSize),
 
             // The start value only applies when the section says it restarts. A document that carries
             // a stale start value from an earlier edit is common, and honouring it renumbers pages
@@ -449,6 +475,50 @@ internal static class Ww8SectionTable
             RestartPageNumberAt = restartsNumbering ? restartAt ?? 1 : null,
             PageNumberFormat = pageNumberFormat,
             HasDifferentFirstPage = titlePage,
+        };
+    }
+
+    /// <summary>
+    /// A section's text grid, as <c>SwWW8ImplReader::SetDocumentGrid</c> builds it
+    /// (<c>sw/source/filter/ww8/ww8par6.cxx</c>:217-309).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>sprmSClm</c> 0 is no grid, 2 lines only, 1 lines and characters and 3 — and any value the switch
+    /// does not know — lines and characters snapped to them. Unlike writerfilter, a character grid is kept
+    /// when <c>dxtCharSpace</c> is nought, and no step is rounded through hundredths of a millimetre or raised
+    /// to <c>MIN_TEXTGRID_SIZE</c>: the item is filled in twips directly.
+    /// </para>
+    /// <para>
+    /// The pitch is <c>dyaLinePitch</c> when it is 1 to 31680 twips, and the item's own 400 otherwise. The
+    /// character width is the default style's East Asian size — <c>sprmCHps</c> sets it with the western one,
+    /// <c>Read_FontSize</c>, <c>ww8par6.cxx</c>:4036-4049 — plus <c>dxtCharSpace</c>'s whole points and
+    /// twentieths, with 240 twips when no style says (<c>:269-293</c>).
+    /// </para>
+    /// </remarks>
+    private static Text.Layout.TextGridSnap? GridOf(int type, int? linePitch, int charSpace, Length documentFontSize)
+    {
+        if (type == 0) return null;
+
+        long pitch = linePitch is >= 1 and <= 31680 ? linePitch.Value : 400;
+        Text.Layout.TextGridSnap grid = new(Length.FromTwips(pitch));
+        if (type == 2) return grid;
+
+        long font = documentFontSize > Length.Zero ? documentFontSize.Twips : 240;
+        long width = font;
+        if (charSpace != 0)
+        {
+            int main = unchecked((int)((uint)charSpace & 0xFFFFF000u)) / 0x1000;
+            width += main * 20L + (charSpace & 0x00000FFF) * 20 / 0xFFF;
+        }
+
+        // `writer_cast<sal_uInt16>` clamps into the item's range.
+        width = Math.Clamp(width, 1, ushort.MaxValue);
+
+        return grid with
+        {
+            Characters = new Text.Layout.CharacterGrid(
+                Length.FromTwips(width), Length.FromTwips(font), SnapsToCharacters: type != 1),
         };
     }
 
@@ -633,6 +703,11 @@ internal static class Ww8SectionTable
     private static class Sprms
     {
         internal const ushort TitlePage = 0x300A;
+
+        // The text grid: sprmSClm, sprmSDyaLinePitch and sprmSDxtCharSpace.
+        internal const ushort GridType = 0x5032;
+        internal const ushort LinePitch = 0x9031;
+        internal const ushort CharacterSpace = 0x7030;
         internal const ushort ColumnCount = 0x500B;
         internal const ushort ColumnGap = 0x900C;
 

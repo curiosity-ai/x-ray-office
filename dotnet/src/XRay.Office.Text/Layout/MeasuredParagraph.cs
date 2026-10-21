@@ -367,6 +367,10 @@ public sealed class MeasuredParagraph
     /// Whether a script change with East Asian text on one side widens the text by a fifth of the em.
     /// True for a document that came from Word; see <see cref="ScriptSpacing"/>.
     /// </param>
+    /// <param name="characterGrid">
+    /// The page's character grid when the paragraph snaps to one, or null. Every East Asian cluster takes
+    /// the cell <see cref="CharacterGrid.Cell"/> gives it instead of its own advance.
+    /// </param>
     public static MeasuredParagraph Measure(
         string text,
         IReadOnlyList<FormattedRun> runs,
@@ -376,7 +380,8 @@ public sealed class MeasuredParagraph
         MetricGrid? grid = null,
         bool blanksAreTransparentToHeight = false,
         bool leadingAboveText = false,
-        bool addsScriptSpace = false)
+        bool addsScriptSpace = false,
+        CharacterGrid? characterGrid = null)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(runs);
@@ -500,6 +505,29 @@ public sealed class MeasuredParagraph
         for (int i = 1; i <= text.Length; i++)
         {
             if (prefix[i] < prefix[i - 1]) prefix[i] = prefix[i - 1];
+        }
+
+        // The character grid replaces each East Asian cluster's own advance with its cell, from the
+        // shaped advances alone: Writer's kern array is the device's text array, before the character
+        // spacing, the objects and the script gaps below are added to it. A zero-width character is part
+        // of the cluster before it and takes no cell of its own (`rKernArray[i] == rKernArray[nLast]`,
+        // `justify.cxx`:191-192).
+        if (characterGrid is { } cells)
+        {
+            bool[] asian = CharacterGrid.AsianCharacters(text);
+            long shift = 0;
+            long previous = prefix[0];
+
+            for (int i = 0; i < text.Length; i++)
+            {
+                long advance = prefix[i + 1] - previous;
+                previous = prefix[i + 1];
+
+                if (asian[i] && advance > 0)
+                    shift += cells.Cell(Length.FromEmu(advance)).Emu - advance;
+
+                prefix[i + 1] += shift;
+            }
         }
 
         // Tracking is charged for the gap *before* each character, so the first pays nothing and a

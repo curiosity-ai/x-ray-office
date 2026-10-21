@@ -134,7 +134,37 @@ public sealed partial class OdtLayoutSource
         _breaksWrappedTables = BreaksWrappedTables(settings);
         _tabsRelativeToIndent = TabsRelativeToIndent(settings);
         _rowHeightsIncludeInsets = RowHeightsIncludeInsets(settings);
+        _decoratesTrailingBlank = DecoratesTrailingBlank(settings);
     }
+
+    /// <summary>
+    /// Whether a line's trailing blank carries the underline or strikethrough of the text before it, as the
+    /// document's settings say. See <see cref="PageParagraph.DecoratesTrailingBlank"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// tdf#168777's <c>IsPaintTrailingSpaceDecorations</c> (<c>sw/source/core/text/portxt.cxx</c>:251-258):
+    /// <c>!MS_WORD_COMP_TRAILING_BLANKS || MS_WORD_UL_TRAIL_SPACE</c>, which ODF spells
+    /// <c>MsWordCompTrailingBlanks</c> and <c>MsWordUlTrailSpace</c>
+    /// (<c>sw/source/uibase/uno/SwXDocumentSettings.cxx</c>:239, 291). Both are false when absent
+    /// (<c>DocumentSettingManager.cxx</c>:82 and the compatibility options' defaults), so a native ODF
+    /// document decorates its trailing blanks; only one LibreOffice wrote from a Word file, which states the
+    /// first true, needs the second.
+    /// </para>
+    /// <para>
+    /// Measured on 26.8's daily with one <c>.odt</c> in four settings variants
+    /// (<c>probes/odt-trailblank/</c>): its underlined and struck-through lines end in a 3 pt rule over the
+    /// trailing blank in every variant but <c>MsWordCompTrailingBlanks</c> true with
+    /// <c>MsWordUlTrailSpace</c> false.
+    /// </para>
+    /// </remarks>
+    /// <param name="settings">The document's <c>office:settings</c>, or null.</param>
+    internal static bool DecoratesTrailingBlank(XElement? settings)
+        => Setting(settings, "MsWordCompTrailingBlanks") != "true"
+           || Setting(settings, "MsWordUlTrailSpace") == "true";
+
+    /// <summary>See <see cref="DecoratesTrailingBlank(XElement?)"/>.</summary>
+    private readonly bool _decoratesTrailingBlank;
 
     /// <summary>
     /// Whether tabs and blanks are left out of a line's height, as the document's settings say.
@@ -1203,6 +1233,7 @@ public sealed partial class OdtLayoutSource
             Shaping = new ShapingOptions(
                 Language: text.Language, DisableKerning: !text.AutoKerning),
             BlanksAreTransparentToHeight = _blanksAreTransparentToHeight,
+            DecoratesTrailingBlank = _decoratesTrailingBlank,
             Fallback = _fonts,
             Runs = runs,
             Fields = walker.Fields,

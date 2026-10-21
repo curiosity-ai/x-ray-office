@@ -1767,7 +1767,10 @@ public static class PageDrawing
                     new DocPoint(pen, baseline - run.Rise),
                     spaceAdd,
                     run.Tracking,
-                    run.WidthScale);
+                    run.WidthScale,
+                    paragraph.Format.TextGrid?.Characters,
+                    paragraph.GridCharacters,
+                    run.Start);
 
                 runs.Add((glyphRun, run.ColourOn(background)));
 
@@ -2695,7 +2698,10 @@ public static class PageDrawing
         DocPoint origin,
         Length spaceAdd,
         Length tracking = default,
-        double widthScale = 1.0)
+        double widthScale = 1.0,
+        CharacterGrid? grid = null,
+        bool[]? gridCharacters = null,
+        int textStart = 0)
     {
         List<PositionedGlyph> glyphs = new(shaped.Glyphs.Count);
         List<int> clusters = new(shaped.Glyphs.Count);
@@ -2710,6 +2716,19 @@ public static class PageDrawing
             // 40-twip spacing comes to 41.958 + 14 x 2 pt — and a justification share is decided after
             // the line's width is known.
             Length advance = Squeezed(shaped.Scale(glyph.Advance, emSize), widthScale);
+
+            // The page's character grid gives an East Asian cluster its cell for an advance and, when it
+            // snaps to characters, a place inside it — `MeasuredParagraph` charged the same cells, so the
+            // pen and the line break agree. See `CharacterGrid`.
+            Length cellOffset = Length.Zero;
+            if (grid is { } cells && gridCharacters is not null && advance > Length.Zero
+                && glyph.Cluster >= 0 && glyph.Cluster < text.Length
+                && textStart + glyph.Cluster < gridCharacters.Length
+                && gridCharacters[textStart + glyph.Cluster])
+            {
+                cellOffset = cells.Offset(advance, text[glyph.Cluster]);
+                advance = cells.Cell(advance);
+            }
 
             // Every glyph carries its tracking, the run's last included, so the text after a tracked
             // run starts one tracking unit further on.
@@ -2758,7 +2777,7 @@ public static class PageDrawing
             glyphs.Add(new PositionedGlyph(
                 glyph.GlyphId,
                 new DocPoint(
-                    pen + Squeezed(shaped.Scale(glyph.OffsetX, emSize), widthScale),
+                    pen + cellOffset + Squeezed(shaped.Scale(glyph.OffsetX, emSize), widthScale),
                     -shaped.Scale(glyph.OffsetY, emSize)),
                 advance));
 
