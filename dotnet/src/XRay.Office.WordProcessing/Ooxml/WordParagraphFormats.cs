@@ -313,9 +313,11 @@ internal static class WordParagraphFormats
         // Attribute by attribute rather than element by element: see WordStyles.ParagraphPropertyLayers.
         List<XElement> indent =
             styles.ParagraphPropertyLayers("ind", paragraphProperties, styleId, tableStyle);
+        XElement? spacingProperties = WithLineUnitsAsTwips(paragraphProperties);
         List<XElement> spacings = GroupedMargins(
-            styles.ParagraphPropertyLayers("spacing", paragraphProperties, styleId, tableStyle),
-            paragraphProperties);
+            styles.ParagraphPropertyLayers("spacing", spacingProperties, styleId, tableStyle),
+            spacingProperties);
+        CharacterIndents chars = new(styles, indent, styleId, paragraphProperties, tableStyle);
 
         Length auto = autoSpacing ?? HtmlAutoSpacing;
 
@@ -349,9 +351,9 @@ internal static class WordParagraphFormats
             // w:start and w:left are the same attribute under two names: the first is the
             // reading-direction form ECMA-376 standardised on and the second is what Word 2007 wrote
             // and what most files in existence still carry.
-            StartIndent = Across(indent, "start", "left") ?? Length.Zero,
-            EndIndent = Across(indent, "end", "right") ?? Length.Zero,
-            FirstLineIndent = FirstLine(indent),
+            StartIndent = chars.Start ?? Across(indent, "start", "left") ?? Length.Zero,
+            EndIndent = chars.End ?? Across(indent, "end", "right") ?? Length.Zero,
+            FirstLineIndent = chars.FirstLine ?? FirstLine(indent),
 
             SpaceBefore = AutoOr(spacings, "beforeAutospacing", "before", auto),
             SpaceAfter = AutoOr(spacings, "afterAutospacing", "after", auto),
@@ -977,6 +979,160 @@ internal static class WordParagraphFormats
         "distribute" => TextAlignment.Distribute,
         _ => TextAlignment.Start,
     };
+
+    /// <summary>
+    /// A paragraph's <c>w:spacing</c> with <c>w:beforeLines</c> and <c>w:afterLines</c> turned into the
+    /// twips they stand for, or the properties unchanged when they state neither.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>DomainMapper</c> (<c>sw/source/writerfilter/dmapper/DomainMapper.cxx</c>:527-534, 551-558) maps a
+    /// hundredth of a line to <c>nIntValue * 240 / 100</c> twips — a line is a fixed 240, whatever the font —
+    /// and does it on a paragraph only: under a style import the two are ignored. The insert does not
+    /// overwrite, and a <c>w:before</c> or <c>w:after</c> stated beside it wins in either attribute order
+    /// (measured, <c>probes/words-indentchars/</c>: <c>before="0" beforeLines="100"</c> and the reverse both
+    /// draw no space, <c>beforeLines="100"</c> alone draws 12 pt and <c>"33"</c> 3.95 pt).
+    /// </para>
+    /// <para>
+    /// Because the value then sits in the paragraph's own context, it also beats a style's <c>w:before</c>,
+    /// which is why it becomes an attribute of the paragraph's own element here rather than a layer of its
+    /// own.
+    /// </para>
+    /// </remarks>
+    private static XElement? WithLineUnitsAsTwips(XElement? paragraphProperties)
+    {
+        XElement? spacing = Word.Child(paragraphProperties, "spacing");
+        if (spacing is null) return paragraphProperties;
+
+        string? before = Word.Attribute(spacing, "before") is null ? Word.Attribute(spacing, "beforeLines") : null;
+        string? after = Word.Attribute(spacing, "after") is null ? Word.Attribute(spacing, "afterLines") : null;
+        if (before is null && after is null) return paragraphProperties;
+
+        XElement copy = new(paragraphProperties!);
+        XElement converted = Word.Child(copy, "spacing")!;
+
+        if (before is not null && Word.Integer(before, out int beforeLines))
+            converted.SetAttributeValue(Word.Name("before"), LineUnitTwips(beforeLines));
+        if (after is not null && Word.Integer(after, out int afterLines))
+            converted.SetAttributeValue(Word.Name("after"), LineUnitTwips(afterLines));
+
+        return copy;
+
+        // `convertTwipToMm100_Limited(n * 240 / 100)`: integer division, and a result of 32768 twips or
+        // more is nought. The hundredths of a millimetre go back to twips unchanged at these sizes.
+        static long LineUnitTwips(int lines)
+        {
+            long twips = lines * 240L / 100;
+            return twips >= 0x8000 ? 0 : twips;
+        }
+    }
+
+    /// <summary>
+    /// The three indents a paragraph states in characters — <c>w:leftChars</c>/<c>w:startChars</c>,
+    /// <c>w:rightChars</c>/<c>w:endChars</c>, <c>w:firstLineChars</c>/<c>w:hangingChars</c> — each null where
+    /// the twips version decides.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A character is the paragraph's East Asian font height: <c>SvxIndentValue::ResolveDouble</c> multiplies
+    /// by <c>m_dIcTwips</c> (<c>editeng/source/items/frmitems.cxx</c>:292-312), which
+    /// <c>SwFont::GetFontUnitMetrics</c> takes from the CJK height of the font the margins are computed with
+    /// (<c>sw/source/core/txtnode/swfont.cxx</c>:345-353, <c>itrcrsr.cxx</c>:170), and the result is rounded
+    /// to a twip. That font is the paragraph's style, not its runs or its mark: measured, a run or a mark at
+    /// 16 pt in a 10.5 pt style still indents two characters by 21 pt, and a 20 pt style by 40.
+    /// </para>
+    /// <para>
+    /// The rules are writerfilter's, which DOCX's own (tdf#83844) shaped: a non-zero count beats the twips
+    /// attribute at every level, even when only inherited (<c>DomainMapper.cxx</c>:571-604 re-insert it); a
+    /// count of nought <em>disables</em> the count, so the twips value — stated or inherited — applies after
+    /// all (<c>DomainMapper_Impl.cxx</c>:3141-3236, <c>StyleSheetTable.cxx</c>:1294-1405); and a hanging
+    /// count stated on the paragraph moves its left indent to the left count plus the hanging one, ignoring
+    /// a <c>w:left</c> (tdf#167721) — on a style it does so only beside a left count.
+    /// </para>
+    /// <para>
+    /// <strong>A table style's paragraph properties are the exception, and it is measured.</strong> They
+    /// reach the cell's paragraph without either fix-up, so the count's unit property is applied after the
+    /// twips one and wins even at nought: a table style stating <c>w:rightChars="0" w:right="374"</c> draws no
+    /// right indent at all, where a paragraph style stating the same keeps the 374 twips
+    /// (<c>probes/words-indentchars/</c>, cases <c>t01</c>, <c>t02</c> and <c>i18</c>). That is the
+    /// right-aligned first column of <c>docx/word_sample.docx</c>'s <c>Report Table</c>.
+    /// </para>
+    /// </remarks>
+    private readonly struct CharacterIndents
+    {
+        public CharacterIndents(
+            WordStyles styles,
+            List<XElement> indent,
+            string? styleId,
+            XElement? paragraphProperties,
+            IReadOnlyList<XElement>? tableStyle)
+        {
+            XElement? direct = Word.Child(paragraphProperties, "ind");
+            HashSet<XElement> fromTable = new(ReferenceEqualityComparer.Instance);
+            if (tableStyle is not null)
+            {
+                foreach (XElement properties in tableStyle)
+                {
+                    if (Word.Child(properties, "ind") is { } found) fromTable.Add(found);
+                }
+            }
+
+            (double? start, _) = Count(indent, fromTable, "startChars", "leftChars");
+            (double? end, _) = Count(indent, fromTable, "endChars", "rightChars");
+            (double? first, XElement? firstLayer) = Count(indent, fromTable, "hangingChars", "firstLineChars");
+
+            if (start is null && end is null && first is null) return;
+
+            // `ParaFirstLineIndentUnit` is negative for a hanging count: `nIntValue / -100.0`.
+            if (first is { } hanging && hanging < 0
+                && (ReferenceEquals(firstLayer, direct) || start is not null))
+            {
+                start = (start ?? 0) - hanging;
+            }
+
+            WordProperty size = styles.ResolveRunProperty("sz", null, styleId, null);
+            long ic = Word.Integer(size.Value, out int halfPoints) ? halfPoints * 10L : 200;
+
+            Start = Of(start, ic);
+            End = Of(end, ic);
+            FirstLine = Of(first, ic);
+        }
+
+        public Length? Start { get; }
+
+        public Length? End { get; }
+
+        public Length? FirstLine { get; }
+
+        private static Length? Of(double? count, long ic)
+            => count is { } value ? Length.FromTwips((long)Math.Round(value * ic, MidpointRounding.AwayFromZero)) : null;
+
+        /// <summary>
+        /// The innermost count in force for one side, in characters, and the layer it came from — or null when
+        /// the twips attribute decides: none is stated, or the innermost stated one is a nought that disables
+        /// the rest.
+        /// </summary>
+        /// <remarks>
+        /// The first-line pair is one property under two names, a hanging count read as its negation.
+        /// </remarks>
+        private static (double? Count, XElement? Layer) Count(
+            List<XElement> layers, HashSet<XElement> fromTable, string first, string second)
+        {
+            foreach (XElement layer in layers)
+            {
+                string? text = Word.Attribute(layer, first) ?? Word.Attribute(layer, second);
+                if (text is null || !Word.Integer(text, out int hundredths)) continue;
+
+                bool negated = first == "hangingChars" && Word.Attribute(layer, first) is not null;
+                double count = (negated ? -hundredths : hundredths) / 100.0;
+
+                if (hundredths == 0 && !fromTable.Contains(layer)) return (null, layer);
+                return (count, layer);
+            }
+
+            return (null, null);
+        }
+    }
 
     /// <summary>
     /// The first line's extra indent, which OOXML states as one of two mutually exclusive attributes.
