@@ -1,9 +1,6 @@
-using System.IO.Compression;
-using System.Xml.Linq;
 using XRay.Office.Core.Documents;
 using XRay.Office.TestKit;
 using XRay.Office.WordProcessing.Layout;
-using XRay.Office.WordProcessing.Ooxml;
 using Shouldly;
 
 namespace XRay.Office.WordProcessing.Tests;
@@ -25,13 +22,11 @@ namespace XRay.Office.WordProcessing.Tests;
 /// <c>FilterText</c> (<c>:461-489</c>).
 /// </para>
 /// <para>
-/// This tree follows Word, so the first group below asserts the cache. The second pins the
-/// reference's rule through <c>DocxReferenceFields.Resolve</c>, because the measurement was the
-/// expensive half of the round that made it and it should not have to be made twice: every value
-/// there is 26.2.4.2's own rendering of the committed fixture
-/// <c>tests/corpus/features/words-reference-field.docx</c>
-/// (<c>probes/docxref-r158/reference-arms.txt</c>), one arm per paragraph, each field caching a
-/// deliberately wrong result so that what the reference draws is its own answer.
+/// This tree follows Word, so the tests below assert the cache, on the committed fixture
+/// <c>tests/corpus/features/words-reference-field.docx</c>, one arm per paragraph, each field
+/// caching a deliberately wrong result so that what the reference draws is its own answer. There is
+/// no way to ask for LibreOffice's reading instead; what it draws on each arm is recorded in
+/// <c>probes/docxref-r158/reference-arms.txt</c>.
 /// </para>
 /// <para>
 /// What following Word costs is in <c>dotnet/TODO.word-parity.md</c>. It is visible on
@@ -71,46 +66,6 @@ public sealed class DocxReferenceFieldTests
     public void TheCompactFormIsDrawnFromItsCacheToo()
         => Arm("L the compact form").ShouldBe("stale .");
 
-    /// <summary>
-    /// The reference's rule, pinned against its own rendering of the same fixture.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Six expansions and three declines. The declines are this reader's policy rather than the
-    /// reference's behaviour and are the same with the switch either way: a collapsed bookmark and
-    /// a name no mark holds would <em>erase</em> what the file cached (26.2.4.2 draws nothing and
-    /// <c>Error: Reference source not found</c> respectively), and a <c>REF</c> whose cached result
-    /// is itself a field is left alone because the reference draws <b>both</b> values.
-    /// </para>
-    /// <para>
-    /// Through <c>Resolve</c> rather than through the layout, because the switch is an environment
-    /// variable and every other test in the process would see it.
-    /// </para>
-    /// </remarks>
-    [Fact]
-    public void TheReferenceExpandsEachBookmarkAsMeasured()
-    {
-        Dictionary<string, string> expansions = DocxReferenceFields.Resolve(Body())!;
-
-        expansions["A_more"].ShouldBe("Table 7");
-        expansions["B_span"].ShouldBe("half one", "to the end of the start paragraph");
-        expansions["E_break"].ShouldBe("Line one Line two", "a w:br reaches the field as a space");
-        expansions["F_seq"].ShouldBe("Figure 1", "a field inside the bookmark contributes its value");
-        expansions["G_hyphen"].ShouldBe("softhyphen and non-breaking", "FilterText's two hyphens");
-        expansions["H_tab"].ShouldBe("before after", "and a w:tab is a space too");
-
-        // A collapsed bookmark expands to nothing in a DOCX whatever it is named -- the #i81002#
-        // cross-reference branch is unreachable from this importer, measured over four names -- and
-        // an empty expansion is declined where it is used rather than here, because erasing what
-        // the file cached is the one substitution that cannot be checked against the page.
-        expansions["C_point"].ShouldBe("");
-        expansions["__RefHeading__5"].ShouldBe("");
-
-        // A name no mark holds is not recorded at all: 26.2.4.2 draws
-        // `Error: Reference source not found` and our own bookmark table is what the lookup missed.
-        expansions.ShouldNotContainKey("Z_missing");
-    }
-
     /// <summary>The instruction reader, on which arguments name a bookmark at all.</summary>
     [Fact]
     public void TheInstructionReaderNamesTheBookmarkOnlyWhenTheTextIsWhatIsQuoted()
@@ -122,14 +77,6 @@ public sealed class DocxReferenceFieldTests
         FieldInstructions.ReferenceBookmark(" REF _Ref1 \\n ").ShouldBeNull();
         FieldInstructions.ReferenceBookmark(" PAGEREF _Ref1 \\h ").ShouldBeNull();
         FieldInstructions.ReferenceBookmark(" REF ").ShouldBeNull();
-    }
-
-    private static XElement Body()
-    {
-        using ZipArchive zip = ZipFile.OpenRead(Corpus.Require(Fixture));
-        using Stream stream = zip.GetEntry("word/document.xml")!.Open();
-
-        return Word.Child(XElement.Load(stream), "body")!;
     }
 
     /// <summary>What the fixture's arm of that label lays out, after the label and its colon.</summary>

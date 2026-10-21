@@ -5,9 +5,9 @@ namespace XRay.Office.WordProcessing;
 /// format the bookmark came out of.
 /// </summary>
 /// <remarks>
-/// Shared because three of the four readers meet the same field: the arithmetic is
-/// <c>SwGetRefField</c>'s and has nothing to do with how a bookmark was spelled, so a second copy of
-/// it would be a second chance to get the control characters wrong.
+/// Kept apart from the RTF reader that uses it because the arithmetic is <c>SwGetRefField</c>'s and
+/// has nothing to do with how a bookmark was spelled. The DOCX reader deliberately draws a
+/// <c>REF</c>'s cached result instead, as Word does; see <c>dotnet/TODO.word-parity.md</c>.
 /// </remarks>
 internal static class ReferenceFieldText
 {

@@ -1814,9 +1814,10 @@ commonest cause and not the only one: 16 of the 37 are on documents holding none
 list before working any word-count failure; several agents have each re-derived it the hard way.
 
 **And `TODO.word-parity.md` lists the rows the gate cannot win for the opposite reason: places
-where 26.2.4.2 is wrong about the document, Word is right, and this project follows Word.** Each
-entry is measured, each has an environment variable that switches the reference's behaviour back
-on, and each names the corpus rows it costs. The first of them is a `TOC \t` switch voiding a
+where LibreOffice is wrong about the document, Word is right, and this project follows Word.** Each
+entry is measured and names the corpus rows it costs. There is no way to ask for LibreOffice's
+reading instead: the `XRAY_OFFICE_LIBREOFFICE_QUIRKS` switch that once offered it was removed on
+2026-10-21, with the code behind it. The first of them is a `TOC \t` switch voiding a
 built-in heading's direct paragraph formatting, which is the whole of why
 `24-25_FAA_Holdover_Tables.docx` prints 154 pages against the reference's 155 while sitting within
 51 characters of it. Check that list too before working a words-track row that will not close.

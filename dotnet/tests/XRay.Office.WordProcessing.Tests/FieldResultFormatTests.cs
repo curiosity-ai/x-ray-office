@@ -27,10 +27,9 @@ namespace XRay.Office.WordProcessing.Tests;
 /// <strong>Word honours <c>\* MERGEFORMAT</c> and the reference does not</strong>, which is the
 /// whole of why this file asserts what it does. The switch means <em>preserve the formatting of the
 /// previous result</em>, so a field carrying it keeps the cached run's properties in Word and this
-/// tree follows Word by default; <c>XRAY_OFFICE_LIBREOFFICE_QUIRKS</c> applies the rule to every
-/// field, which is 26.2.4.2's own reading. That arm is measured in the probe rather than here,
-/// because the switch is an environment variable and a test that set it would reach every other
-/// test running beside it. <c>TODO.word-parity.md</c> carries the entry and what it costs.
+/// tree follows Word. 26.2.4.2 applies the rule to every field, and this tree deliberately does not
+/// reproduce that; the reference's arm is measured in the probe, and <c>TODO.word-parity.md</c>
+/// carries the entry and what it costs.
 /// </para>
 /// <para>
 /// <strong>Only a field this tree actually recomputes.</strong> For anything else the cached text
