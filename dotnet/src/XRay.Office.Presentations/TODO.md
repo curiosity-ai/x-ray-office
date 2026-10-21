@@ -131,8 +131,13 @@ reference's 393, exactly 52 bullets, now 393 against 393.
       is z-order in both vocabularies. Tables and connectors have their own entries below.
 - [x] Shape properties: transform (with flip **before** rotation), solid fill, line, text body.
       **Drop shadows** are drawn, in all three readers — `a:outerShdw` inline or through the
-      theme's `a:effectRef`, the Escher `fShadow` group, and ODF's `draw:shadow*`. Still not
-      drawn: glow, soft edge, reflection, and `a:innerShdw`, which LibreOffice also ignores
+      theme's `a:effectRef`, the Escher `fShadow` group, and ODF's `draw:shadow*`. **Glow and
+      soft edge** are drawn for PPTX as 26.8.1.1 rasterises them (`SlideEffects`): a glow as one
+      bitmap, or two on a custom shape, which LibreOffice wraps twice; a soft edge only on a
+      solid fill with no outline — a softened picture or gradient is still drawn hard, because
+      its pixels are not available to this layer. Not drawn: the shadow of a glow, text glow,
+      glow and soft edge from `.ppt` and `.odp`, reflection (which 26.8.1.1 does not draw
+      either), and `a:innerShdw`, which LibreOffice also ignores
       (`EffectProperties::pushToPropMap` acts on `outerShdw` alone).
 - [x] Text bodies via the shared text layout, with insets and anchoring, including
       **shrink-to-fit**: a body stating `a:normAutofit` has its size solved from scratch, because

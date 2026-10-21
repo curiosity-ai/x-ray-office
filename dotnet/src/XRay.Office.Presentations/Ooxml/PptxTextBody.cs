@@ -84,8 +84,10 @@ internal static class PptxTextBody
     /// <c>applyShapeReference</c> already brought over from the layout or master placeholder
     /// (<c>oox/source/ppt/pptshapecontext.cxx:183-186</c>), so the slide's own
     /// <c>&lt;a:bodyPr/&gt;</c> — which is what PowerPoint writes on a placeholder it has not
-    /// re-formatted — overrides nothing, and the anchor, the insets, the wrap and the autofit all
-    /// come from above.
+    /// re-formatted — overrides only what it states, and the anchor and the insets come from
+    /// above. <strong>The wrap and the autofit are the exception</strong>: the a:bodyPr context
+    /// writes both for every element it reads, stated or not, so they come from the nearest
+    /// a:bodyPr alone. See where <c>Wraps</c> and <c>AutoFit</c> are set below.
     /// </para>
     /// <para>
     /// It matters most for the anchor. <c>chapter_4_0.pptx</c> states <c>anchor="ctr"</c> once,
@@ -107,6 +109,11 @@ internal static class PptxTextBody
     /// shape with no <c>p:style</c> and wrong for the 1197 corpus slide shapes that have one.
     /// </para>
     /// </param>
+    /// <param name="presentationObject">
+    /// True for a placeholder LibreOffice imports as a presentation object rather than as a
+    /// custom shape, which wraps its text whatever <c>a:bodyPr/@wrap</c> says. See
+    /// <see cref="PptxTextStyles.IsPresentationTextObject"/>.
+    /// </param>
     public static SlideTextBody Read(
         XElement body,
         DrawingTheme? theme = null,
@@ -114,7 +121,8 @@ internal static class PptxTextBody
         Func<int, IReadOnlyList<XElement>>? inherited = null,
         SlideFields? fields = null,
         IReadOnlyList<XElement?>? inheritedBodyProperties = null,
-        DrawingCharacterStyle? shapeTextStyle = null)
+        DrawingCharacterStyle? shapeTextStyle = null,
+        bool presentationObject = false)
     {
         ArgumentNullException.ThrowIfNull(body);
 
@@ -131,11 +139,9 @@ internal static class PptxTextBody
         XElement? properties = bodyChain.Count > 0 ? bodyChain[0] : null;
         XElement? listStyle = Drawing.Child(body, "lstStyle");
 
-        // One counter and one "is this level numbering" flag per outline level, carried across
-        // the whole body: a:buAutoNum numbers a *run* of paragraphs, and the run is broken by a
-        // paragraph that draws a different kind of marker or none at all.
-        int[] counters = new int[9];
-        bool[] counting = new bool[9];
+        // The numbering state, carried across the whole body: a:buAutoNum numbers a *run* of
+        // paragraphs, and what breaks or restarts the run is DrawingListNumbering's.
+        DrawingListNumbering numbering = new();
 
         // And one bullet face per level, for the same reason and by the same mechanism: the
         // shape's numbering rule outlives the paragraph that wrote to it. See `Marker`.
@@ -146,31 +152,37 @@ internal static class PptxTextBody
         {
             paragraphs.Add(
                 Paragraph(
-                    paragraph, listStyle, theme, defaultTypeface, counters, counting,
+                    paragraph, listStyle, theme, defaultTypeface, numbering,
                     markerFaces, inherited, fields, shapeTextStyle));
         }
 
-        // The autofit choice is taken whole from the nearest a:bodyPr that states one of the
-        // three: a slide's <a:bodyPr/> saying nothing is not the same as its saying a:noAutofit.
+        // The autofit choice is taken whole from the nearest a:bodyPr there is — the shape's own
+        // whenever its txBody has one — and from nothing further up, whether or not that element
+        // states one of the three.
         //
-        // `resizes` records *which* of the three that nearest one was, which @wrap needs and
-        // @fontScale does not — see Wraps below. Where one element states more than one, which is
-        // malformed, normAutofit wins over spAutoFit and both over noAutofit; the order of the
-        // tests is the precedence.
-        XElement? autofit = null;
-        bool resizes = false;
-        foreach (XElement source in bodyChain)
-        {
-            if (Drawing.Child(source, "normAutofit") is { } stated)
-            {
-                autofit = stated;
-                resizes = true;
-                break;
-            }
-
-            if (Drawing.Child(source, "spAutoFit") is not null) { resizes = true; break; }
-            if (Drawing.Child(source, "noAutofit") is not null) break;
-        }
+        // That is 26.x's rule, not PowerPoint's. A slide placeholder starts from a copy of its
+        // layout's text body (`applyShapeReference`, then `std::make_shared<TextBody>(…)` in
+        // `PPTShapeContext::onCreateContext`, `oox/source/ppt/pptshapecontext.cxx:183-188` at tag
+        // 26.8.1.1), and `TextBodyPropertiesContext`'s constructor then writes
+        // `TextFitToSize = NONE` and `TextAutoGrowHeight = false` into it for every a:bodyPr it
+        // reads (`oox/source/drawingml/textbodypropertiescontext.cxx:205-207`) before any
+        // a:normAutofit or a:spAutoFit child can set them back. So a slide's `<a:bodyPr/>`
+        // discards the a:normAutofit its layout or master states. Only a txBody with no a:bodyPr
+        // at all, which the schema does not allow, keeps the inherited choice — and then from
+        // the layout's own a:bodyPr, which reset the master's in the same way.
+        //
+        // Measured on autofit-inherit.pptx, whose layout body states a:normAutofit and whose
+        // slide states `<a:bodyPr/>` over overflowing 20 pt text: 26.2.4.2 and 26.8.1.1 both draw
+        // it at 20 pt (average glyph box 22.33 pt, the same as an explicit a:noAutofit), where
+        // the nearest-stating-element rule shrank it to about 15.6 pt. Master after 26.8
+        // (`52277daba816`) inherits as PowerPoint does; 26.8.1.1 does not.
+        //
+        // `resizes` records *which* of the three it was, which @wrap needs and @fontScale does
+        // not — see Wraps below. Where one element states more than one, which is malformed,
+        // normAutofit wins over spAutoFit; the order of the tests is the precedence.
+        XElement? autofit = properties is null ? null : Drawing.Child(properties, "normAutofit");
+        bool resizes = autofit is not null
+                       || (properties is not null && Drawing.Child(properties, "spAutoFit") is not null);
 
         (string? Preset, IReadOnlyList<FontworkAdjustment> Adjustments) warp = Warp(bodyChain);
 
@@ -195,7 +207,21 @@ internal static class PptxTextBody
             // overhangs 720 pt by 8.7 pt so that `Google Slides` extracts as `Google Slid`.
             // That two-character loss is the whole character difference on 15 of the 28
             // documents filed as `text`.
-            Wraps = Stated(bodyChain, "wrap") != "none" || resizes,
+            //
+            // And it is the nearest a:bodyPr's attribute alone, for the reason the autofit is:
+            // `TextBodyPropertiesContext` writes `TextWordWrap = (wrap == square)` with `square`
+            // as the default for every a:bodyPr it reads (`textbodypropertiescontext.cxx:64-65`
+            // at tag 26.8.1.1), so a slide's `<a:bodyPr/>` wraps whatever its layout says. And a
+            // presentation object wraps whatever its own a:bodyPr says, because word wrap is a
+            // custom-shape property — see PptxTextStyles.IsPresentationTextObject. Measured on
+            // wrap-inherit.pptx: 9 lines in 26.2.4.2 and 26.8.1.1 for a body placeholder whose
+            // layout states wrap="none" with `<a:bodyPr/>`, `wrap="none"` or `wrap="square"` on
+            // the slide, where reading the attribute down the chain drew 3. A text box with
+            // wrap="none" still draws one line.
+            Wraps = presentationObject
+                    || properties is null
+                    || Drawing.Attribute(properties, "wrap") != "none"
+                    || resizes,
             AutoFit = autofit is not null,
             FontScale = Thousandth(autofit, "fontScale", 1.0),
             WarpPreset = warp.Preset,
@@ -418,8 +444,7 @@ internal static class PptxTextBody
         XElement? listStyle,
         DrawingTheme? theme,
         string? defaultTypeface,
-        int[] counters,
-        bool[] counting,
+        DrawingListNumbering numbering,
         string?[] markerFaces,
         Func<int, IReadOnlyList<XElement>>? inherited,
         SlideFields? fields,
@@ -519,7 +544,10 @@ internal static class PptxTextBody
             Length.FromEmu(Emu(chain, "marL")),
             Length.FromEmu(Emu(chain, "indent")),
             Language(Drawing.Child(paragraph, "r")),
-            Marker(chain, theme, level, counters, counting, markerFaces, text.Length > 0))
+            Marker(
+                chain, theme, level, numbering,
+                DrawingListNumbering.OwnBullet(chain.Take(withinBody)), markerFaces,
+                text.Length > 0))
         {
             // a:defTabSz, whose absence means DrawingML's own default of one inch and not a word
             // processor's half inch. Nearly every master states it explicitly as 914400, which is
@@ -571,7 +599,7 @@ internal static class PptxTextBody
     /// which are not installed on the machines this runs on.
     /// </para>
     /// <para>
-    /// <c>a:buAutoNum</c> is numbered by the counters the caller carries across the body, which
+    /// <c>a:buAutoNum</c> is numbered by the <see cref="DrawingListNumbering"/> the caller carries across the body, which
     /// is the same walk and the same arrays extraction uses — <see cref="DrawingTextBody"/> owns
     /// the arithmetic so that a nested list cannot be numbered two different ways by the two
     /// readers. <strong>An empty paragraph draws no marker and consumes no number:</strong> the
@@ -605,12 +633,12 @@ internal static class PptxTextBody
         List<XElement> chain,
         DrawingTheme? theme,
         int level,
-        int[] counters,
-        bool[] counting,
+        DrawingListNumbering numbering,
+        XElement? ownBullet,
         string?[] markerFaces,
         bool hasText)
     {
-        int slot = Math.Clamp(level, 0, counters.Length - 1);
+        int slot = Math.Clamp(level, 0, markerFaces.Length - 1);
 
         // Before any of the branches below, and whether or not this paragraph draws anything:
         // stating a face writes it into the level's rule, and a `buNone` paragraph states it just
@@ -625,22 +653,20 @@ internal static class PptxTextBody
         {
             if (Drawing.Child(source, "buNone") is not null)
             {
-                counting[slot] = false;
+                numbering.Next(slot, ownBullet, null, hasText);
                 return null;
             }
 
             if (Drawing.Child(source, "buAutoNum") is { } number)
             {
-                if (!hasText) return null;
-
-                return Marked(
-                    DrawingTextBody.AutoNumber(number, slot, counters, counting),
-                    chain, theme, markerFaces[slot], isSymbol: false);
+                return numbering.Next(slot, ownBullet, number, hasText) is { } label
+                    ? Marked(label, chain, theme, markerFaces[slot], isSymbol: false)
+                    : null;
             }
 
             if (Drawing.Child(source, "buChar") is not { } bullet) continue;
 
-            counting[slot] = false;
+            numbering.Next(slot, ownBullet, null, hasText);
             if (!hasText) return null;
 
             string? character = Drawing.Attribute(bullet, "char");
@@ -654,7 +680,7 @@ internal static class PptxTextBody
             return Marked(FirstCodePoint(character), chain, theme, markerFaces[slot]);
         }
 
-        counting[slot] = false;
+        numbering.Next(slot, ownBullet, null, hasText);
         return null;
     }
 
@@ -972,7 +998,82 @@ internal static class PptxTextBody
             SymbolFont: symbolFont,
             // A hyperlink run is an EditEngine field, which changes how it breaks and how the
             // lines it spills onto are stacked — see SlideTextRun.IsField and SlideTextLayout.
-            IsField: field);
+            IsField: field,
+            UnderlineColour: UnderlineColour(runProperties, defaults));
+    }
+
+    /// <summary>
+    /// The colour <c>a:uFill</c> gives a run's underline, or null for the text's own colour.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>TextCharacterPropertiesContext</c> reads <c>a:uFill</c> through a
+    /// <c>SimpleFillPropertiesContext</c> into a <c>model::ComplexColor</c>
+    /// (<c>oox/source/drawingml/textcharacterpropertiescontext.cxx:156-157</c> at tag 26.8.1.1),
+    /// whose destructor converts the fill's best solid colour with
+    /// <c>Color::createComplexColor</c> (<c>misccontexts.cxx:597-600</c>), and
+    /// <c>TextCharacterProperties::pushToPropMap</c> then sets <c>CharUnderlineColor</c> from
+    /// <c>getRGBColor()</c> unless <c>a:uFillTx</c> is in force
+    /// (<c>textcharacterproperties.cxx:214-225</c>). Three consequences, each measured on
+    /// 26.8.1.1 and 26.2.4.2 alike with one underlined red run per case:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><description>An <c>a:srgbClr</c> or <c>a:prstClr</c> draws its own colour —
+    ///   <c>00B050</c> and <c>0000FF</c> — and <strong>its transforms are dropped</strong>:
+    ///   <c>getRGBColor</c> returns the stored components, so <c>00B050</c> under
+    ///   <c>lumMod 50%</c> is still drawn <c>00B050</c>.</description></item>
+    ///   <item><description>An <c>a:schemeClr</c> draws <strong>black</strong>. A theme
+    ///   <c>ComplexColor</c> carries no components, so <c>getRGBColor</c> answers
+    ///   <c>000000</c> — the regression of <c>a07bad0</c> (2025-11), present in both references.
+    ///   PowerPoint draws the theme colour. <strong>This follows the reference</strong>, as the
+    ///   presentations track does wherever 26.x and the author disagree and there is no
+    ///   word-parity switch for it (the of-pie composite colour is the precedent); the black is
+    ///   the reference's bug, and the line to change when the benchmark fixes it is
+    ///   here.</description></item>
+    ///   <item><description>Any other colour model — <c>a:sysClr</c>, <c>a:hslClr</c>,
+    ///   <c>a:scrgbClr</c> — reaches <c>createComplexColor</c>'s "TODO - Add other options" and
+    ///   comes back unused, so the next source in the chain decides, and failing that the text's
+    ///   colour.</description></item>
+    /// </list>
+    /// <para>
+    /// The run's own properties win over the inherited ones, as <c>assignIfUsed</c> does, and an
+    /// <c>a:uFillTx</c> anywhere in the chain turns the colour off, as the merged
+    /// <c>moUnderlineFillFollowText</c> does. Only a solid fill is read: the corpus states no
+    /// other, and a gradient's best solid colour is a stop the probe did not measure.
+    /// </para>
+    /// <para>
+    /// Not modelled, and worth knowing: <c>a:uLn</c> is not handled by that context at all
+    /// (<c>:149-150</c> is commented out) and its <c>return this</c> lets the line's own
+    /// <c>a:solidFill</c> reach the <em>run's</em> fill, so 26.8.1.1 draws a run stating
+    /// <c>a:uLn</c> with a blue fill in blue text as well as with a blue underline.
+    /// </para>
+    /// </remarks>
+    private static Colour? UnderlineColour(XElement? runProperties, XElement?[] defaults)
+    {
+        if (Drawing.Child(runProperties, "uFillTx") is not null) return null;
+        foreach (XElement? source in defaults)
+        {
+            if (source is not null && Drawing.Child(source, "uFillTx") is not null) return null;
+        }
+
+        return First(runProperties, defaults, element =>
+        {
+            XElement? solid = Drawing.Child(Drawing.Child(element, "uFill"), "solidFill");
+            if (solid is null) return null;
+
+            if (Drawing.Child(solid, "srgbClr") is { } rgb
+                && uint.TryParse(
+                    Drawing.Attribute(rgb, "val"), NumberStyles.HexNumber,
+                    CultureInfo.InvariantCulture, out uint value))
+            {
+                return Colour.FromRgb(value & 0xFFFFFF);
+            }
+
+            if (Drawing.Child(solid, "prstClr") is { } preset)
+                return PresetColours.Lookup(Drawing.Attribute(preset, "val"));
+
+            return Drawing.Child(solid, "schemeClr") is not null ? Colour.Black : (Colour?)null;
+        });
     }
 
     /// <summary>

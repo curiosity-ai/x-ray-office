@@ -42,7 +42,7 @@ public static class SlideDrawing
             foreach (PlacedShape shape in slide.Shapes)
             {
                 OfficeOperation.ThrowIfCancelled();
-                DrawShape(shape, sink);
+                DrawShape(shape, slide.Size, sink);
             }
         }
         finally
@@ -53,11 +53,28 @@ public static class SlideDrawing
         }
     }
 
-    private static void DrawShape(PlacedShape shape, IDrawingSink sink)
+    private static void DrawShape(PlacedShape shape, DocSize page, IDrawingSink sink)
     {
         if (shape.Shadow is { } shadow) DrawShadow(shape, shadow, sink);
 
-        if (shape.Fill is { } fill && FillReachesThePage(shape.Picture))
+        // The glow goes under the shape and over its shadow: `createEmbeddedGlowPrimitive` puts
+        // the glow first and the content second, and the shadow is added round both
+        // (sdrcustomshapeprimitive2d.cxx:47-52, 80-96). The shadow of the glow itself is not
+        // drawn here.
+        if (shape.Glow is { } glow)
+        {
+            foreach (SlideEffects.Layer layer in SlideEffects.Glow(shape, glow, page))
+                sink.DrawImage(layer.Image, layer.Destination);
+        }
+
+        // A soft edge replaces the fill with its softened bitmap; the text is drawn over it as
+        // before, because the effect is applied ahead of the text (:39-45).
+        if (shape.SoftEdge is { } softEdge
+            && SlideEffects.SoftEdge(shape, softEdge, page) is { } softened)
+        {
+            sink.DrawImage(softened.Image, softened.Destination);
+        }
+        else if (shape.Fill is { } fill && FillReachesThePage(shape.Picture))
         {
             Fill(shape.FillOutline, fill, sink);
 
@@ -510,8 +527,13 @@ public static class SlideDrawing
 
         if (run.Rules is not { Count: > 0 } rules) return;
 
-        foreach (DocRect rule in rules)
+        for (int i = 0; i < rules.Count; i++)
         {
+            DocRect rule = rules[i];
+
+            // The underline is the first rule whenever a colour of its own travels with it.
+            Colour colour = i == 0 && run.UnderlineColour is { } underline ? underline : run.Colour;
+
             sink.FillPath(
                 new GraphicsPath()
                     .MoveTo(new DocPoint(rule.X, rule.Y))
@@ -519,7 +541,7 @@ public static class SlideDrawing
                     .LineTo(new DocPoint(rule.X + rule.Width, rule.Y + rule.Height))
                     .LineTo(new DocPoint(rule.X, rule.Y + rule.Height))
                     .Close(),
-                Paint.Solid(run.Colour));
+                Paint.Solid(colour));
         }
     }
 
