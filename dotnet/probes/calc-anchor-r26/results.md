@@ -23,3 +23,7 @@ Reference: `/opt/libreoffice26.8/program/soffice` 26.8.1.1, `FONTCONFIG_FILE=/tm
   embedded Type 1 (converted). Before: three CFF faces named, not embedded (and Inter Light
   missed, drawn in DejaVu Sans). After: Loma, Inter, Unifont embedded as CID Type 0C, poppler
   draws the same glyphs as the reference; `pdftotext` unchanged.
+- `cond.fodt`: `DejaVu Sans` and `DejaVu Sans Condensed`, rendered with a fontconfig file that adds
+  a directory holding copies of the eight DejaVu*Condensed faces (and `HOME` pointing at it for
+  this tree's index). 26.8.1.1: DejaVuSans, DejaVuSansCondensed. Before: DejaVuSansCondensed for
+  both. After: DejaVuSans, DejaVuSansCondensed. `cff.fodt`'s Inter Light: Inter-Light after.

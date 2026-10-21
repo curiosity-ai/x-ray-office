@@ -10,14 +10,21 @@ namespace XRay.Office.Text.Fonts;
 /// <param name="Weight">The weight on the OpenType 1-1000 scale.</param>
 /// <param name="IsItalic">Whether the face is italic or oblique.</param>
 /// <param name="IsFixedPitch">Whether every glyph has the same advance.</param>
+/// <param name="WidthClass">
+/// The <c>OS/2</c> width class, 1 (ultra-condensed) to 9 (ultra-expanded), 5 being normal.
+/// </param>
 public readonly record struct InstalledFace(
     string Path,
     int FaceIndex,
     string FamilyName,
     int Weight,
     bool IsItalic,
-    bool IsFixedPitch)
+    bool IsFixedPitch,
+    int WidthClass = InstalledFace.NormalWidth)
 {
+    /// <summary>The <c>OS/2</c> width class of a face of normal width.</summary>
+    public const int NormalWidth = 5;
+
     /// <summary>A stable key for the face, for caching and for deduplicating embedded fonts.</summary>
     public string FaceKey => FaceIndex == 0 ? Path : $"{Path}#{FaceIndex}";
 
@@ -134,6 +141,13 @@ public sealed class SystemFontIndex
     private readonly Dictionary<string, List<InstalledFace>> _families =
         new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Faces by their legacy (name ID 1) family where it differs from the typographic one, which
+    /// is consulted only for a name no family answers. See <see cref="Add"/>.
+    /// </summary>
+    private readonly Dictionary<string, List<InstalledFace>> _legacyFamilies =
+        new(StringComparer.Ordinal);
+
     private readonly List<Diagnostic> _diagnostics = [];
 
     /// <summary>Every face found, in no particular order.</summary>
@@ -178,10 +192,21 @@ public sealed class SystemFontIndex
     }
 
     /// <summary>The faces of a family, or empty when none is installed under that name.</summary>
+    /// <remarks>
+    /// A family's typographic name answers first; a legacy (name ID 1) name answers only a request
+    /// no typographic family answers, so <c>Inter Light</c> finds Inter's light faces while
+    /// <c>Inter</c> still finds the whole family.
+    /// </remarks>
     public IReadOnlyList<InstalledFace> Family(string? familyName)
-        => _families.TryGetValue(FontSubstitutions.Normalise(familyName), out List<InstalledFace>? faces)
+    {
+        string key = FontSubstitutions.Normalise(familyName);
+
+        return _families.TryGetValue(key, out List<InstalledFace>? faces)
             ? faces
-            : [];
+            : _legacyFamilies.TryGetValue(key, out List<InstalledFace>? legacy)
+                ? legacy
+                : [];
+    }
 
     /// <summary>True when a family is installed.</summary>
     public bool Has(string? familyName) => Family(familyName).Count > 0;
@@ -250,18 +275,61 @@ public sealed class SystemFontIndex
                 path, index, family,
                 OpenTypeFace.WeightOf(os2, head),
                 OpenTypeFace.IsItalicOf(os2, head, post),
-                post.IsFixedPitch);
+                post.IsFixedPitch,
+                os2?.WidthClass is >= 1 and <= 9 ? os2.Value.WidthClass : InstalledFace.NormalWidth);
 
-            if (!_families.TryGetValue(installed.NormalisedFamily, out List<InstalledFace>? list))
+            Register(_families, installed);
+
+            // The legacy family name, name ID 1, as a lookup alias. LibreOffice registers every one
+            // a face carries (`PhysicalFontCollection::Add` through `PhysicalFontFace::GetAliases`),
+            // and fontconfig lists it beside the typographic one, so a document asking for
+            // `Inter Light` gets Inter's light face: measured on 26.8.1.1 with
+            // `probes/calc-anchor-r26/cff.fodt`, which embeds `Inter-Light` where this tree drew
+            // DejaVu Sans.
+            if (NameTable.Read(file, NameTable.FamilyId) is { Length: > 0 } legacy
+                && FontSubstitutions.Normalise(legacy) != installed.NormalisedFamily)
             {
-                list = [];
-                _families[installed.NormalisedFamily] = list;
+                Register(_legacyFamilies, installed with { FamilyName = legacy });
             }
+        }
+    }
 
-            // The same family may be installed twice — a system copy and a user copy — and the first
-            // directory searched wins, since that is the one a user expects.
-            if (!list.Any(f => f.Weight == installed.Weight && f.IsItalic == installed.IsItalic))
-                list.Add(installed);
+    /// <summary>Files a face under its family, keeping one face per weight and slant.</summary>
+    /// <remarks>
+    /// <para>
+    /// The same family may be installed twice — a system copy and a user copy — and the first
+    /// directory searched wins, since that is the one a user expects.
+    /// </para>
+    /// <para>
+    /// <strong>Except that a face of normal width beats a narrower or wider one</strong> of the same
+    /// weight and slant. <c>DejaVu Sans Condensed</c>'s typographic family is <c>DejaVu Sans</c>, so
+    /// the two shared a slot and whichever file was enumerated first answered every
+    /// <c>DejaVu Sans</c> request. LibreOffice prefers the normal width when a request names none
+    /// (<c>PreferNormalFontWidthMatchValue</c>), and fontconfig's default pattern asks for width
+    /// 100: measured on 26.8.1.1 with the eight condensed faces added to a fontconfig directory,
+    /// <c>DejaVu Sans</c> draws in DejaVu Sans and <c>DejaVu Sans Condensed</c> in the condensed
+    /// face, where this tree drew the condensed face for both.
+    /// </para>
+    /// </remarks>
+    private static void Register(Dictionary<string, List<InstalledFace>> families, InstalledFace face)
+    {
+        if (!families.TryGetValue(face.NormalisedFamily, out List<InstalledFace>? list))
+        {
+            list = [];
+            families[face.NormalisedFamily] = list;
+        }
+
+        int at = list.FindIndex(f => f.Weight == face.Weight && f.IsItalic == face.IsItalic);
+        if (at < 0)
+        {
+            list.Add(face);
+            return;
+        }
+
+        if (Math.Abs(face.WidthClass - InstalledFace.NormalWidth)
+            < Math.Abs(list[at].WidthClass - InstalledFace.NormalWidth))
+        {
+            list[at] = face;
         }
     }
 
