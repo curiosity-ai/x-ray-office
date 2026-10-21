@@ -983,6 +983,7 @@ public sealed class Paginator
             LaidOutParagraph laidOut =
                 paragraph.HasRuns || paragraph.HasInlineObjects || paragraph.LabelRaisesFirstLine
                 || paragraph.NeedsGlyphFallback || paragraph.HasScriptSpace
+                || paragraph.GridCharacters is not null
                 // And a character width, which is the one property of the shortcut's own
                 // arguments that cannot express it: the text overload measures from a face, a
                 // size and the shaping, and a scale is none of those.

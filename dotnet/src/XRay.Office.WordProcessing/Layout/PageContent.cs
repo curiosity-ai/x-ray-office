@@ -340,6 +340,21 @@ public sealed record PageParagraph : PageBlock
     public bool HasScriptSpace
         => _hasScriptSpace ??= AddsScriptSpace && ScriptSpacing.Boundaries(Text).Count > 0;
 
+    private bool[]? _gridCharacters;
+
+    /// <summary>
+    /// Which characters the page's character grid reaches, or null when the paragraph is on none.
+    /// </summary>
+    /// <remarks>
+    /// The third reason a paragraph cannot take the single-face shortcut, for the same reason as
+    /// <see cref="HasScriptSpace"/>: the cells are widths the prefix table carries. See
+    /// <see cref="CharacterGrid"/>.
+    /// </remarks>
+    public bool[]? GridCharacters
+        => Format.TextGrid?.Characters is null
+            ? null
+            : _gridCharacters ??= CharacterGrid.AsianCharacters(Text);
+
     /// <summary>
     /// The device grid the paragraph's fonts are measured through.
     /// </summary>
@@ -746,7 +761,8 @@ public sealed record PageParagraph : PageBlock
 
         return MeasuredParagraph.Measure(
             Text, runs, shaper: null, Itemisation, MeasurementObjects(), metrics,
-            BlanksAreTransparentToHeight, WriterLineBox.LeadingAboveText, AddsScriptSpace);
+            BlanksAreTransparentToHeight, WriterLineBox.LeadingAboveText, AddsScriptSpace,
+            Format.TextGrid?.Characters);
     }
 
     /// <summary>

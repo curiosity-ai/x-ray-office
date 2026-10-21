@@ -366,7 +366,7 @@ public sealed partial class DocxLayoutSource
         _pendingBelowTarget = -1;
         _indexFieldDepth = 0;
         _sectionLeftMargins = LeftMargins(body);
-        _sectionGridPitches = GridPitches(body);
+        _sectionGrids = SectionGrids(body);
 
         // Before the walk, because a REF may name a bookmark the walk has not reached yet -- which in
         // a document whose references point forward is most of them. See `DocxReferenceFields`.
@@ -685,30 +685,32 @@ public sealed partial class DocxLayoutSource
                                ?? PageGeometry.Letter.Margins.Left)];
 
     /// <summary>
-    /// Each section's text-grid pitch, in the order the body states them, or null for a section without a
-    /// grid.
+    /// Each section's text grid, in the order the body states them, or null for a section without one; its
+    /// <see cref="TextGridSnap.Snaps"/> is decided per paragraph by <see cref="TextGridOf"/>.
     /// </summary>
     /// <remarks>
     /// <para>
     /// <c>w:docGrid</c>, as <c>DomainMapper</c> (<c>sw/source/writerfilter/dmapper/DomainMapper.cxx</c>:1253-1295)
-    /// and <c>SectionPropertyMap::CloseSectionGroup</c> (<c>PropertyMap.cxx</c>:1942-1966, 2034) read it: the
+    /// and <c>SectionPropertyMap::CloseSectionGroup</c> (<c>PropertyMap.cxx</c>:1942-2036) read it: the
     /// type <c>default</c> (and an absent type) is no grid; <c>lines</c>, <c>linesAndChars</c> and
     /// <c>snapToChars</c> all snap lines. The pitch travels through hundredths of a millimetre and back to
     /// twips, each step rounded, and one outside 1 to 31680 twips is read as 1; a grid whose line count
-    /// would not fit a 16-bit integer is dropped. An absent <c>w:linePitch</c> is that same 1.
+    /// would not fit a 16-bit integer is dropped. An absent <c>w:linePitch</c> is that same 1. On the way back
+    /// <c>SwTextGridItem::PutValue</c> raises a pitch under 100 twips to 100 (<c>MIN_TEXTGRID_SIZE</c>,
+    /// <c>sw/source/core/layout/atrfrm.cxx</c>:2520-2537, rhbz#1043551).
     /// </para>
     /// <para>
-    /// Only the vertical half: a character grid's widths are not modelled, and nor is the ruby height,
-    /// which a DOCX grid always states as nought.
+    /// The character half is <see cref="CharacterGridOf"/>. The ruby height a DOCX grid always states as
+    /// nought, so it is not modelled.
     /// </para>
     /// </remarks>
-    private static List<Length?> GridPitches(XElement body)
+    private List<TextGridSnap?> SectionGrids(XElement body)
         => [.. body
             .Descendants(Word.Name("sectPr"))
             .Where(section => section.Parent is not { } parent || !Word.Is(parent, "sectPrChange"))
-            .Select(GridPitch)];
+            .Select(SectionGrid)];
 
-    private static Length? GridPitch(XElement section)
+    private TextGridSnap? SectionGrid(XElement section)
     {
         XElement? grid = Word.Child(section, "docGrid");
         string? type = Word.Attribute(grid, "type");
@@ -716,12 +718,86 @@ public sealed partial class DocxLayoutSource
         if (type is not ("lines" or "linesAndChars" or "snapToChars")) return null;
 
         long twips = Word.Integer(Word.Attribute(grid, "linePitch"), out int stated) ? stated : 1;
-        long mm100 = (long)Math.Round(twips * 127.0 / 72.0, MidpointRounding.AwayFromZero);
+        long mm100 = TwipsToMm100Limited(twips);
         if (mm100 < 1 || mm100 > 31680) mm100 = 1;
 
-        long pitch = Math.Max(1, (long)Math.Round(mm100 * 72.0 / 127.0, MidpointRounding.AwayFromZero));
-        return Length.FromTwips(pitch);
+        long pitch = Math.Max(100, Mm100ToTwips(mm100));
+        return new TextGridSnap(Length.FromTwips(pitch), Characters: CharacterGridOf(grid, type));
     }
+
+    /// <summary>
+    /// A section's character grid, or null when its <c>w:docGrid</c> is a grid of lines only.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>linesAndChars</c> and <c>snapToChars</c> are both <c>LINES_AND_CHARS</c>, the second with
+    /// <c>SnapToChars</c> (<c>DomainMapper.cxx</c>:1284-1291) — and either becomes a grid of lines when
+    /// <c>w:charSpace</c> is nought or absent (<c>PropertyMap.cxx</c>:1958-1964).
+    /// </para>
+    /// <para>
+    /// The pitch is <c>CloseSectionGroup</c>'s arithmetic to the letter (<c>PropertyMap.cxx</c>:1968-2035):
+    /// the East Asian font size of the document's defaults (writerfilter's own default is ten points),
+    /// overridden by that of the style whose converted name is <c>Standard</c> — Word's <c>Normal</c> — when
+    /// that style states one (tdf#139418, tdf#107359), as whole twips in
+    /// hundredths of a millimetre; then <c>w:charSpace</c>, a signed number of 4096ths of a point whose top
+    /// twenty bits are the whole points and whose low twelve a fraction scaled to twentieths, each part
+    /// converted on its own; and back to twips through <c>PutValue</c>, at least 100.
+    /// </para>
+    /// <para>
+    /// The base font height the non-snapping mode subtracts is the <c>Standard</c> style's East Asian size
+    /// as the layout reads it (<c>fntcache.cxx</c>:886-894) — the same two sources without the trip through
+    /// hundredths of a millimetre.
+    /// </para>
+    /// </remarks>
+    private CharacterGrid? CharacterGridOf(XElement grid, string type)
+    {
+        if (type == "lines") return null;
+        if (!Word.Integer(Word.Attribute(grid, "charSpace"), out int charSpace) || charSpace == 0) return null;
+
+        int? defaults = HalfPoints(_styles.DefaultRunProperties);
+        int? standard = HalfPoints(_styles.All
+            .FirstOrDefault(style => style.Type == WordStyleType.Paragraph && style.Name == "Normal")
+            ?.RunProperties);
+
+        // `fHeight * 20.0 + 0.5` truncated, of a height in points: a half-point count times ten.
+        long heightTwips = (standard ?? defaults ?? 20) * 10L;
+        long width = TwipsToMm100Limited(heightTwips);
+
+        // "main lives in top 20 bits, and is signed": the mask is unsigned in the C++, and the result
+        // assigned back to a signed integer before the division, which truncates towards nought.
+        int main = unchecked((int)((uint)charSpace & 0xFFFFF000u)) / 0x1000;
+        int fraction = (charSpace & 0x00000FFF) * 20 / 0xFFF;
+        width += TwipsToMm100Limited(main * 20L) + TwipsToMm100Limited(fraction);
+
+        // `PutValue` refuses a width outside 0..65535 twips and the item keeps the one it had; no document
+        // reaches that with a charSpace Word writes, so such a grid is read as one of lines.
+        long widthTwips = Mm100ToTwips(width);
+        if (widthTwips < 0 || widthTwips > ushort.MaxValue) return null;
+
+        return new CharacterGrid(
+            Length.FromTwips(Math.Max(100, widthTwips)),
+            Length.FromTwips(heightTwips),
+            SnapsToCharacters: type == "snapToChars");
+
+        static int? HalfPoints(XElement? runProperties)
+            => Word.Integer(Word.Attribute(Word.Child(runProperties, "sz"), "val"), out int size) ? size : null;
+    }
+
+    /// <summary>
+    /// <c>ConversionHelper::convertTwipToMm100_Limited</c>: anything from 32768 twips up is nought, as Word
+    /// treats it (<c>sw/source/writerfilter/dmapper/ConversionHelper.cxx</c>:423-430), and the rest rounds
+    /// half away from nought (<c>o3tl::MulDiv</c>).
+    /// </summary>
+    private static long TwipsToMm100Limited(long twips)
+        => twips >= 0x8000 ? 0 : RoundedRatio(twips, 127, 72);
+
+    /// <summary><c>o3tl::toTwips</c> of hundredths of a millimetre, rounding half away from nought.</summary>
+    private static long Mm100ToTwips(long mm100) => RoundedRatio(mm100, 72, 127);
+
+    private static long RoundedRatio(long value, long multiplier, long divisor)
+        => value >= 0
+            ? (value * multiplier + divisor / 2) / divisor
+            : (value * multiplier - divisor / 2) / divisor;
 
     /// <summary>The text grid a paragraph being read now snaps to, or null.</summary>
     /// <remarks>
@@ -734,8 +810,8 @@ public sealed partial class DocxLayoutSource
     private TextGridSnap? TextGridOf(XElement? properties)
     {
         if (!_inBody || InHeaderFooter || _frameDepth > 0 || _noteDepth > 0) return null;
-        if (_sectionGridPitches.Count == 0) return null;
-        if (_sectionGridPitches[Math.Clamp(_sectionIndex, 0, _sectionGridPitches.Count - 1)] is not { } pitch)
+        if (_sectionGrids.Count == 0) return null;
+        if (_sectionGrids[Math.Clamp(_sectionIndex, 0, _sectionGrids.Count - 1)] is not { } grid)
             return null;
 
         WordProperty snap = _styles.ResolveParagraphProperty(
@@ -744,14 +820,14 @@ public sealed partial class DocxLayoutSource
             Word.Value(properties, "pStyle") ?? _styles.DefaultStyleId(WordStyleType.Paragraph));
         if (snap.HasValue && !snap.IsOn) return null;
 
-        return new TextGridSnap(pitch, _tableDepth == 0 || _adjustsLineHeightInTable);
+        return grid with { Snaps = _tableDepth == 0 || _adjustsLineHeightInTable };
     }
 
     /// <summary>True while <see cref="Read"/> walks the body, for <see cref="TextGridOf"/>.</summary>
     private bool _inBody;
 
-    /// <summary>Each section's grid pitch; see <see cref="GridPitches"/>.</summary>
-    private List<Length?> _sectionGridPitches = [];
+    /// <summary>Each section's text grid; see <see cref="SectionGrids"/>.</summary>
+    private List<TextGridSnap?> _sectionGrids = [];
 
     /// <summary>
     /// The left margin of the section the walk is in, for a page-anchored table's offset.
