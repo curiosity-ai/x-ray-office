@@ -61,6 +61,23 @@ public readonly record struct Escapement(int Percent, int Proportion)
     /// </remarks>
     public const int AutomaticPercent = 33;
 
+    /// <summary>
+    /// The percentage that stands for an <em>automatic</em> rise, which is no percentage at all.
+    /// </summary>
+    /// <remarks>
+    /// <c>DFLT_ESC_AUTO_SUPER</c>, <c>MAX_ESC_POS + 1</c> (<c>include/editeng/escapementitem.hxx</c>:32), and
+    /// every format's keyword spelling reaches it — <c>w:vertAlign</c> (<c>DomainMapper.cxx</c>:3140-3153),
+    /// <c>\super</c> through the same sprm, <c>sprmCIss</c> (<c>ww8par6.cxx</c>:3460-3486) and ODF's
+    /// <c>super</c> (<c>xmloff/source/style/escphdl.cxx</c>:52-56). Writer then places the text by font
+    /// metrics rather than by a fraction of the height: <c>SwSubFont::CalcEsc</c>
+    /// (<c>sw/source/core/txtnode/swfont.cxx</c>:1417-1450) raises a superscript by the unshrunk ascent less
+    /// the shrunk one, and lowers a subscript by the unshrunk descent less the shrunk one. 33 % of the
+    /// height is the same answer on a face with no line gap, which is why <see cref="AutomaticPercent"/>
+    /// stood in for it, and is 0.15 pt short at 12 pt Liberation Serif, whose gap the ascent carries:
+    /// measured 4.70 against 4.55.
+    /// </remarks>
+    public const int Automatic = 14000;
+
     /// <summary>The size an automatic superscript or subscript is set at.</summary>
     /// <remarks><c>DFLT_ESC_PROP</c>, the companion to <see cref="AutomaticPercent"/>.</remarks>
     public const int AutomaticProportion = 58;
@@ -69,10 +86,13 @@ public readonly record struct Escapement(int Percent, int Proportion)
     public static Escapement None => default;
 
     /// <summary>LibreOffice's automatic superscript: raised a third of the height, at 58% of the size.</summary>
-    public static Escapement Superscript { get; } = new(AutomaticPercent, AutomaticProportion);
+    public static Escapement Superscript { get; } = new(Automatic, AutomaticProportion);
 
     /// <summary>Its automatic subscript, which is the same pair lowered.</summary>
-    public static Escapement Subscript { get; } = new(-AutomaticPercent, AutomaticProportion);
+    public static Escapement Subscript { get; } = new(-Automatic, AutomaticProportion);
+
+    /// <summary>True for an automatic rise, placed by font metrics rather than by a percentage.</summary>
+    public bool IsAutomatic => Math.Abs(Percent) == Automatic;
 
     /// <summary>True when the text is neither moved nor resized.</summary>
     public bool IsNone => Percent == 0 && Proportion is 0 or 100;
@@ -97,6 +117,22 @@ public readonly record struct Escapement(int Percent, int Proportion)
     public Length RiseOf(OpenTypeFace face, Length emSize)
     {
         if (Percent == 0) return Length.Zero;
+
+        if (IsAutomatic)
+        {
+            // Writer's ascent carries the face's external leading (`SwFntObj::GetFontAscent`), and the
+            // descent is the height less it; both in whole twips, as the device answers them.
+            LineMetrics metrics = LineSpacing.Resolve(face, leadingAboveText: WriterLineBox.LeadingAboveText);
+            Length small = SizeOf(emSize);
+            long ascent = metrics.ScaledAscent(emSize).Twips;
+            long smallAscent = metrics.ScaledAscent(small).Twips;
+
+            if (Percent > 0) return Length.FromTwips(ascent - smallAscent);
+
+            long descent = metrics.ScaledLineHeight(emSize).Twips - ascent;
+            long smallDescent = metrics.ScaledLineHeight(small).Twips - smallAscent;
+            return Length.FromTwips(-(descent - smallDescent));
+        }
 
         double height = Math.Round((double)LineSpacing.Resolve(face).ScaledLineHeight(emSize).Twips);
         return Length.FromTwips((long)(height * Percent / 100.0));

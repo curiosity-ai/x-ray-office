@@ -1377,6 +1377,16 @@ public static class PageDrawing
 
             DocRect next = ShadeArea(area, paragraph, top, bottom);
 
+            // A box inside the indents is filled to its outer edge, rules and distances included.
+            if (paragraph.Borders is { InsideIndents: true } box)
+            {
+                Length left = box.Left?.Allowance ?? Length.Zero;
+                Length right = box.Right?.Allowance ?? Length.Zero;
+                next = new DocRect(
+                    next.X - left, next.Y - box.Above,
+                    next.Width + left + right, next.Height + box.Above + box.Below);
+            }
+
             // Joined when the paragraph immediately before was filled the same way: the rectangle grows
             // downwards over whatever sat between the two, which is the space one's spacing-after and the
             // other's spacing-before left blank.

@@ -1340,7 +1340,8 @@ public sealed class Ww8Document : IWordProcessingDocument, IPaginatedDocument
                 IsStruckThrough: run.IsStruckThrough,
                 Tracking: run.Tracking,
                 WidthPerCent: run.WidthPerCent,
-                Link: run.Link));
+                Link: run.Link,
+                UnescapedEmSize: run.Escapement.Percent != 0 ? run.Size : default));
         }
 
         return varies ? runs : [];

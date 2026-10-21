@@ -664,7 +664,7 @@ internal static class WordParagraphFormats
             italic.IsOn,
             Word.Attribute(language.Element, "val"),
             WordThemeColour.Read(colour.Element, theme),
-            EscapementOf(vertical.Element),
+            EscapementOf(styles, vertical, runProperties, styleId, characterStyleId, resolvedSize),
             // Both are toggles and both are the same item, so the two cannot combine: Word writes at most
             // one of them per layer, and full capitals win where a file states both — which is what
             // `SvxCaseMapItem` holding a single value forces on any reader.
@@ -840,6 +840,85 @@ internal static class WordParagraphFormats
     /// <c>sub</c> keywords do, and which LibreOffice imports as the same item. <c>baseline</c> is the third
     /// value and means neither, which is also what an absent element means.
     /// </remarks>
+    private static Layout.Escapement EscapementOf(
+        WordStyles styles,
+        WordProperty vertical,
+        XElement? runProperties,
+        string? styleId,
+        string? characterStyleId,
+        Length size)
+    {
+        // A run's own `w:position` is deferred until the run's text is appended
+        // (`DomainMapper.cxx`:2434-2439), so it wins over a `w:vertAlign` beside it, which is applied as it
+        // is read. Zero is "the lack of the value" and is not parsed at all.
+        if (PositionOf(Word.Child(runProperties, "position")) is { } halves)
+        {
+            return Positioned(halves, size);
+        }
+
+        if (vertical.Origin == WordPropertyOrigin.Direct) return EscapementOf(vertical.Element);
+
+        // A style's: the character style's chain beats the paragraph style's, as every run property's does.
+        return StyleEscapement(characterStyleId, WordStyleType.Character)
+               ?? StyleEscapement(styleId, WordStyleType.Paragraph)
+               ?? EscapementOf(vertical.Element);
+
+        Layout.Escapement? StyleEscapement(string? id, WordStyleType type)
+        {
+            WordStyle? current = styles.Find(id, type);
+            HashSet<string> visited = new(StringComparer.Ordinal);
+
+            for (int depth = 0; current is not null && depth < 32; depth++)
+            {
+                // `w:vertAlign` follows `w:position` in `CT_RPr`, so where one style states both the
+                // later insert is the one the item keeps.
+                if (Word.Child(current.RunProperties, "vertAlign") is { } align) return EscapementOf(align);
+
+                if (PositionOf(Word.Child(current.RunProperties, "position")) is { } stated)
+                {
+                    // `DomainMapper.cxx`:2440-2464: a style's offset cannot be a percentage of a size not
+                    // yet known, so it becomes the automatic pair — except a paragraph style's negative
+                    // one, which is deferred like a run's and reaches the style's own size.
+                    return type == WordStyleType.Paragraph && stated < 0
+                        ? Positioned(stated, size)
+                        : stated > 0 ? Layout.Escapement.Superscript : Layout.Escapement.Subscript;
+                }
+
+                if (!visited.Add(current.StyleId)) break;
+                current = styles.Find(current.BasedOn, type);
+            }
+
+            return null;
+        }
+    }
+
+    /// <summary>A non-zero <c>w:position</c>, in half-points, or null.</summary>
+    private static int? PositionOf(XElement? position)
+        => Word.Integer(Word.Attribute(position, "val"), out int halves) && halves != 0 ? halves : null;
+
+    /// <summary>
+    /// A half-point offset as the escapement writerfilter makes of it.
+    /// </summary>
+    /// <remarks>
+    /// <c>round(halves / 2 / size × 100)</c> per cent at full size, clamped to <c>MAX_ESC_POS</c>
+    /// (<c>DomainMapper.cxx</c>:3997-4019) — rounded, where WW8's <c>sprmCHpsPos</c> truncates. The
+    /// percentage is then of the face's height like any escapement's: measured on the 26.8 daily, 6
+    /// half-points at 12 pt Liberation Serif raise the run 3.45 pt (25 % of its 13.8 pt height) and 3
+    /// half-points 1.75 (13 %, from 12.5 rounded away from zero).
+    /// </remarks>
+    private static Layout.Escapement Positioned(int halves, Length size)
+    {
+        double points = size.Points;
+        if (points <= 0) return halves > 0 ? Layout.Escapement.Superscript : Layout.Escapement.Subscript;
+
+        double percent = Math.Round(halves / 2.0 / points * 100, MidpointRounding.AwayFromZero);
+        int clamped = (int)Math.Clamp(percent, -MaxEscapement, MaxEscapement);
+        return clamped == 0 ? Layout.Escapement.None : new Layout.Escapement(clamped, 100);
+    }
+
+    /// <summary><c>MAX_ESC_POS</c>, <c>include/editeng/escapementitem.hxx</c>:31.</summary>
+    private const int MaxEscapement = 13999;
+
     private static Layout.Escapement EscapementOf(XElement? vertAlign) =>
         Word.Attribute(vertAlign, "val") switch
         {

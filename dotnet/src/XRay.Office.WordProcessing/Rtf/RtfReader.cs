@@ -193,6 +193,7 @@ public sealed class RtfDocument : IWordProcessingDocument, IPaginatedDocument
             blocks.AddRange(Convert(fonts, block));
         }
 
+        RtfParagraphBorders.Apply(blocks);
         blocks = LiftParagraphFrames(blocks);
 
         PaginationOptions pagination = PaginationOptions.Word with
@@ -389,6 +390,7 @@ public sealed class RtfDocument : IWordProcessingDocument, IPaginatedDocument
     {
         List<PageBlock> blocks = new(stated.Count);
         foreach (RtfLayoutBlock block in stated) blocks.AddRange(Convert(fonts, block));
+        RtfParagraphBorders.Apply(blocks);
         return blocks;
     }
 
@@ -452,6 +454,10 @@ public sealed class RtfDocument : IWordProcessingDocument, IPaginatedDocument
 
                 // Carried for `LiftParagraphFrames`, which is the only reader of it.
                 Source = paragraph.FrameRequest,
+
+                // As stated; `RtfParagraphBorders.Apply` resolves them against the neighbours.
+                Borders = paragraph.Borders,
+                Shading = paragraph.Shading,
             });
         }
 
@@ -765,7 +771,8 @@ public sealed class RtfDocument : IWordProcessingDocument, IPaginatedDocument
                 Underline: run.Underline,
                 IsStruckThrough: run.IsStruckThrough,
                 WidthPerCent: run.WidthPerCent,
-                Link: run.Link));
+                Link: run.Link,
+                UnescapedEmSize: run.Escapement.Percent != 0 ? run.Size : default));
         }
 
         return varies ? runs : [];

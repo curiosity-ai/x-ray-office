@@ -460,37 +460,45 @@ public sealed partial class OdtLayoutSource
     /// </remarks>
     /// <param name="settings">The document's <c>office:settings</c>, or null.</param>
     internal static bool DropCapPunctuation(XElement? settings)
-    {
-        XElement? configuration = settings?
+        => ConfigurationSettings(settings) is not { } configuration
+           || Item(configuration, "DropCapPunctuation") == "true";
+
+    /// <summary>
+    /// The <c>ooo:configuration-settings</c> set, or null when the document has none Writer would read.
+    /// </summary>
+    /// <remarks>
+    /// <c>SwXMLImport::SetConfigurationSettings</c> is the only path any of these items reaches the document
+    /// by, and it runs only for a set whose qualified <c>config:name</c> resolves to the OpenOffice.org
+    /// namespace — see <see cref="DropCapPunctuation"/>. So a set whose prefix is undeclared leaves every
+    /// setting at Writer's own default however its items read: measured on the 26.8 daily with
+    /// <c>TabsRelativeToIndent</c> false, a tab after a 1 in indent lands at 200.80 pt with the declaration
+    /// and at 272.80 — the default's answer — without it.
+    /// </remarks>
+    private static XElement? ConfigurationSettings(XElement? settings)
+        => settings?
             .Descendants(XName.Get("config-item-set", OdfNamespaces.Config))
             .FirstOrDefault(IsConfigurationSettings);
 
-        return configuration is null
-               || configuration
-                   .Descendants(XName.Get("config-item", OdfNamespaces.Config))
-                   .FirstOrDefault(item =>
-                       item.Attribute(XName.Get("name", OdfNamespaces.Config))?.Value == "DropCapPunctuation")?
-                   .Value == "true";
+    private static bool IsConfigurationSettings(XElement set)
+    {
+        string? name = set.Attribute(XName.Get("name", OdfNamespaces.Config))?.Value;
+        int colon = name?.IndexOf(':', StringComparison.Ordinal) ?? -1;
+        if (name is null || colon <= 0) return false;
 
-        static bool IsConfigurationSettings(XElement set)
-        {
-            string? name = set.Attribute(XName.Get("name", OdfNamespaces.Config))?.Value;
-            int colon = name?.IndexOf(':', StringComparison.Ordinal) ?? -1;
-            if (name is null || colon <= 0) return false;
-
-            return name[(colon + 1)..] == "configuration-settings"
-                   && set.GetNamespaceOfPrefix(name[..colon])?.NamespaceName == "http://openoffice.org/2004/office";
-        }
+        return name[(colon + 1)..] == "configuration-settings"
+               && set.GetNamespaceOfPrefix(name[..colon])?.NamespaceName == "http://openoffice.org/2004/office";
     }
 
-    /// <summary>One <c>config:config-item</c>'s value from a document's settings, or null when absent.</summary>
+    /// <summary>One <c>config:config-item</c>'s value from a document's configuration settings, or null.</summary>
     /// <remarks>
-    /// The items are nested in <c>config:config-item-set</c> elements, so this searches by descendant name
-    /// rather than walking the sets: which set a flag lives in is a detail of how LibreOffice groups them,
-    /// and a reader that hard-codes the grouping breaks on the next version that regroups.
+    /// Only the configuration set is searched, which is the only one Writer reads these from; inside it the
+    /// items are found by descendant name rather than by walking the nesting.
     /// </remarks>
     private static string? Setting(XElement? settings, string name)
-        => settings?
+        => ConfigurationSettings(settings) is { } configuration ? Item(configuration, name) : null;
+
+    private static string? Item(XElement set, string name)
+        => set
             .Descendants(XName.Get("config-item", OdfNamespaces.Config))
             .FirstOrDefault(item =>
                 item.Attribute(XName.Get("name", OdfNamespaces.Config))?.Value == name)?
@@ -1483,7 +1491,8 @@ public sealed partial class OdtLayoutSource
                 Underline: style.Underline,
                 IsStruckThrough: style.IsStruckThrough,
                 WidthPerCent: style.WidthPerCent,
-                Link: range.Link));
+                Link: range.Link,
+                UnescapedEmSize: style.Escapement.Percent != 0 ? style.Size : default));
         }
 
         return varies ? runs : [];
