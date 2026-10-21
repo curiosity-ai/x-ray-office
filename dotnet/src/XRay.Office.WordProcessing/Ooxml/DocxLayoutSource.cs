@@ -3145,15 +3145,30 @@ public sealed partial class DocxLayoutSource
     /// The document's default tab interval.
     /// </summary>
     /// <remarks>
-    /// Half an inch when the document does not say, which is what Word uses. A zero would make a tab
-    /// advance nowhere, so it is treated as absent rather than honoured.
+    /// <para>
+    /// Half an inch when the document does not say, which is what Word uses.
+    /// </para>
+    /// <para>
+    /// <strong>A stated zero is one hundredth of a millimetre</strong>, which is 26.8.1.1's tdf#168607
+    /// (backport 9170e1487ea3): <c>DomainMapper_Impl::ApplySettingsTable</c> writes
+    /// <c>nDefTab ? nDefTab : 1</c> into <c>TabStopDistance</c>, because Writer refuses a zero and Word
+    /// means "no default stops" by it. So a tab with no stop of its own advances to the next hundredth of
+    /// a millimetre and the text after it all but touches the text before. Measured on an authored
+    /// <c>Alpha⇥Bravo⇥Charlie</c>: 26.8.1.1 draws one word at 72.1 pt, where 26.2.4.2 drew the three
+    /// 709 twips apart and this tree 720.
+    /// </para>
     /// </remarks>
     private static Length TabInterval(XElement? settings)
-        => Word.Attribute(Word.Child(settings, "defaultTabStop"), "val") is { } text
-           && Word.Long(text, out long twips)
-           && twips > 0
-            ? Length.FromTwips(twips)
-            : Length.FromTwips(720);
+    {
+        if (Word.Attribute(Word.Child(settings, "defaultTabStop"), "val") is not { } text
+            || !Word.Long(text, out long twips)
+            || twips < 0)
+        {
+            return Length.FromTwips(720);
+        }
+
+        return twips == 0 ? Length.FromMm100(1) : Length.FromTwips(twips);
+    }
 
     /// <summary>
     /// Which version of Word wrote the file, from <c>w:compat</c>, or <c>-1</c> when it does not say.
