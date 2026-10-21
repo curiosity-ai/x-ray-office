@@ -332,6 +332,14 @@ public static partial class ChartLayout
     /// </remarks>
     private static readonly Length TickLength = Length.FromMm100(150);
 
+    /// <summary>A minor tick's length as a fraction of a major one's.</summary>
+    /// <remarks>
+    /// <c>VAxisProperties::makeTickmarkProperties</c> gives depth 1 <c>nTickLength * 3 / 4</c>
+    /// (<c>chart2/source/view/axes/VAxisProperties.cxx</c>). Measured on a chartex histogram through
+    /// the 26.8 daily: 3.17 to 3.19 pt each side of the axis, against the major's 4.24.
+    /// </remarks>
+    private const double MinorTickScale = 0.75;
+
     /// <summary>The gap between a tick and the label beside it.</summary>
     /// <remarks><c>AXIS2D_TICKLABELSPACING = 100</c> (<c>ViewDefines.hxx:31</c>).</remarks>
     private static readonly Length LabelSpacing = Length.FromMm100(100);
@@ -1352,6 +1360,10 @@ public static partial class ChartLayout
                 if (axis == 1 && secondary is null) continue;
 
                 List<ChartSeries> subset = plot.SeriesOf(kind, axis);
+
+                // A series with no plotter draws nothing — UnsupportedChart has no series shapes —
+                // although it has scaled the axes it would have been drawn against.
+                subset.RemoveAll(series => series.IsUnsupported);
                 if (subset.Count == 0) continue;
 
                 ChartPlot part = plot with { Series = subset };
@@ -1410,6 +1422,9 @@ public static partial class ChartLayout
                 labels);
         }
 
+        if (plot.UnsupportedNotice is { Length: > 0 } notice)
+            AddUnsupportedNotice(notice, frame, measurer, shapes, labels);
+
         AddTitles(
             plot,
             frame,
@@ -1421,6 +1436,85 @@ public static partial class ChartLayout
 
         return new ChartDrawing(
             area, boxes, lines, labels, shapes, DiagramAreaOf(plot, frame, measurer));
+    }
+
+    /// <summary>The face <c>UnsupportedChart</c>'s notice is set in.</summary>
+    /// <remarks>
+    /// The text shape states no <c>CharFontName</c>, so it takes the chart drawing model's default,
+    /// which is <c>DefaultFontType::LATIN_TEXT</c> — Liberation Serif here. Read out of the 26.8
+    /// daily's PDF of every chartex QA document: <c>LiberationSerif</c> at 10 pt.
+    /// </remarks>
+    private const string UnsupportedNoticeFamily = "Liberation Serif";
+
+    /// <summary>The notice's size: <c>CharHeight</c> 10 in every script.</summary>
+    private static readonly Length UnsupportedNoticeSize = Length.FromPoints(10);
+
+    /// <summary>
+    /// <c>UnsupportedChart::createShapes</c>: the notice, centred on the chart's page.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// One centred paragraph in a text shape that grows to fit it, with
+    /// <c>TextMaximumFrameWidth</c> two thirds of the page reference size, white fill and white
+    /// outline, no paragraph margins, translated to the page's centre
+    /// (<c>chart2/source/view/charttypes/UnsupportedChart.cxx</c>:69-111, 26-8 branch). So the box
+    /// is the text's own extent and its centre is the frame's.
+    /// </para>
+    /// <para>
+    /// Measured on <c>funnel1.xlsx</c> through the 26.8 daily: a 283.64 pt frame centred at
+    /// (312.89, 663.80) draws a 185.30 × 22.45 box centred at (312.90, 663.79), and the second line
+    /// starts where the first would have run past 189.09 pt.
+    /// </para>
+    /// </remarks>
+    private static void AddUnsupportedNotice(
+        string notice,
+        DocRect frame,
+        ChartText measurer,
+        List<ChartShape> shapes,
+        List<ChartLabel> labels)
+    {
+        ChartText face = measurer.For(UnsupportedNoticeFamily);
+        Length size = UnsupportedNoticeSize;
+
+        string[] lines = LinesOf(face, notice, size, false, frame.Width * (2.0 / 3.0));
+        if (lines.Length == 0) return;
+
+        Length width = Length.Zero;
+        Length pitch = Length.Zero;
+        foreach (string line in lines)
+        {
+            DocSize measured = face.Measure(line, size);
+            width = Length.Max(width, measured.Width);
+            pitch = Length.Max(pitch, measured.Height);
+        }
+
+        Length height = pitch * lines.Length;
+        Length centreX = frame.X + (frame.Width / 2);
+        Length top = frame.Y + ((frame.Height - height) / 2);
+
+        // A shape and not a ChartBox, because every host paints boxes first and the reference
+        // paints this over the gridlines and the series it sits on: the plotter's shapes are
+        // created after the axes' and the grid's. The labels still come last, so an axis label
+        // under the box stays visible where the reference hides it.
+        GraphicsPath box = new();
+        box.MoveTo(new DocPoint(centreX - (width / 2), top));
+        box.LineTo(new DocPoint(centreX + (width / 2), top));
+        box.LineTo(new DocPoint(centreX + (width / 2), top + height));
+        box.LineTo(new DocPoint(centreX - (width / 2), top + height));
+        box.Close();
+        shapes.Add(new ChartShape(box, Colour.White, Colour.White, Length.Zero));
+
+        for (int at = 0; at < lines.Length; at++)
+        {
+            labels.Add(new ChartLabel(
+                lines[at],
+                new DocPoint(centreX, top + (pitch * at) + (pitch / 2)),
+                ChartLabelAnchor.Centre,
+                size,
+                Colour.Black,
+                Family: UnsupportedNoticeFamily,
+                IsBold: false));
+        }
     }
 
     /// <summary>How many points a fitted curve is sampled at.</summary>
@@ -2705,6 +2799,38 @@ public static partial class ChartLayout
             }
         }
 
+        // The minor ticks, which a deleted axis does not draw. See ChartPlot.ValueMinorTicks.
+        ChartTickMark minorMark = secondary ? ChartTickMark.None : plot.ValueMinorTicks;
+        Length minorOuter = OuterTick(minorMark) * MinorTickScale;
+        Length minorInner = InnerTick(minorMark) * MinorTickScale;
+
+        if (visible && minorOuter + minorInner > Length.Zero && plot.ValueMinorIntervals > 1)
+        {
+            for (int at = 0; at + 1 < ticks.Count; at++)
+            {
+                for (int step = 1; step < plot.ValueMinorIntervals; step++)
+                {
+                    double between = scale.Fraction(ticks[at])
+                        + ((scale.Fraction(ticks[at + 1]) - scale.Fraction(ticks[at]))
+                           * step / plot.ValueMinorIntervals);
+
+                    lines.Add(columns
+                        ? new ChartLine(
+                            new DocPoint(
+                                axisX + (minorOuter * outward), area.Bottom - (area.Height * between)),
+                            new DocPoint(
+                                axisX - (minorInner * outward), area.Bottom - (area.Height * between)),
+                            stroke.Colour, stroke.Width, stroke.Dash)
+                        : new ChartLine(
+                            new DocPoint(
+                                area.Left + (area.Width * between), axisY + (minorInner * outward)),
+                            new DocPoint(
+                                area.Left + (area.Width * between), axisY - (minorOuter * outward)),
+                            stroke.Colour, stroke.Width, stroke.Dash));
+                }
+            }
+        }
+
         foreach (double tick in ticks)
         {
             double along = scale.Fraction(tick);
@@ -3035,6 +3161,34 @@ public static partial class ChartLayout
                         new DocPoint(axisAt - outer, y),
                         new DocPoint(axisAt + inner, y),
                         stroke.Colour, stroke.Width, stroke.Dash));
+                }
+            }
+        }
+
+        // The minor ticks, one set per interval at the CategoryMinorIntervals points between two
+        // major ones — the middle of each slot on a shifted axis. See ChartPlot.CategoryMinorTicks.
+        Length minorOuter = OuterTick(plot.CategoryMinorTicks) * MinorTickScale;
+        Length minorInner = InnerTick(plot.CategoryMinorTicks) * MinorTickScale;
+
+        if (plot.CategoryAxisVisible && minorOuter + minorInner > Length.Zero
+            && plot.CategoryMinorIntervals > 1)
+        {
+            for (int at = 0; at + 1 <= ticks; at++)
+            {
+                for (int step = 1; step < plot.CategoryMinorIntervals; step++)
+                {
+                    double between = Along(at)
+                        + ((Along(at + 1) - Along(at)) * step / plot.CategoryMinorIntervals);
+
+                    lines.Add(columns
+                        ? new ChartLine(
+                            new DocPoint(area.Left + (area.Width * between), axisAt - minorInner),
+                            new DocPoint(area.Left + (area.Width * between), axisAt + minorOuter),
+                            stroke.Colour, stroke.Width, stroke.Dash)
+                        : new ChartLine(
+                            new DocPoint(axisAt - minorOuter, area.Bottom - (area.Height * between)),
+                            new DocPoint(axisAt + minorInner, area.Bottom - (area.Height * between)),
+                            stroke.Colour, stroke.Width, stroke.Dash));
                 }
             }
         }
@@ -5149,6 +5303,20 @@ public static partial class ChartLayout
                             sample));
                     }
                 }
+                else if (entry.IsCircle)
+                {
+                    // VLegendSymbolFactory::createSymbol's Circle arm: min(width, height) across,
+                    // centred in the key, filled and not outlined.
+                    if (entry.Fill is { } colour)
+                    {
+                        shapes.Add(Marker(
+                            ChartMarker.Circle,
+                            new DocPoint(columnX + (box.Key.Width / 2), rowY + (box.RowHeight / 2)),
+                            Smaller(box.Key.Width, box.Key.Height),
+                            colour,
+                            colour) with { Line = null });
+                    }
+                }
                 else
                 {
                     boxes.Add(new ChartBox(
@@ -5246,6 +5414,16 @@ public static partial class ChartLayout
         {
             if (series.Name is not { Length: > 0 } name) continue;
 
+            // A series with no plotter keys itself with UnsupportedChart's LegendSymbolStyle::
+            // Circle: a filled circle as wide as the key is high, in the series' own colour.
+            if (series.IsUnsupported)
+            {
+                entries.Add(new LegendEntry(
+                    name, series.Fill ?? series.Line, null, Length.Zero, IsLine: false,
+                    Dash: null, IsCircle: true));
+                continue;
+            }
+
             entries.Add(new LegendEntry(
                 name, series.Fill, series.Line, series.LineWidth,
                 DrawsLineKey(plot, series), series.DashPattern, series.LineCap,
@@ -5278,6 +5456,10 @@ public static partial class ChartLayout
     /// The symbol's stated size, or null to take the key's own square extent — which is what the
     /// source does, <c>min(rEntryKeyAspectRatio.Width, rEntryKeyAspectRatio.Height)</c>.
     /// </param>
+    /// <param name="IsCircle">
+    /// Whether the key is <c>LegendSymbolStyle::Circle</c> — a series with no plotter, see
+    /// <see cref="ChartSeries.IsUnsupported"/>.
+    /// </param>
     private readonly record struct LegendEntry(
         string Name,
         Colour? Fill,
@@ -5287,7 +5469,8 @@ public static partial class ChartLayout
         IReadOnlyList<Length>? Dash,
         LineCap Cap = LineCap.Butt,
         ChartMarker Marker = ChartMarker.None,
-        Length? MarkerSize = null);
+        Length? MarkerSize = null,
+        bool IsCircle = false);
 
     /// <summary>
     /// Whether a series' legend key is a line sample rather than a filled box.
@@ -5302,6 +5485,9 @@ public static partial class ChartLayout
     /// </remarks>
     private static bool DrawsLineKey(ChartPlot plot, ChartSeries series)
     {
+        // UnsupportedChart answers LegendSymbolStyle::Circle, and its key is square.
+        if (series.IsUnsupported) return false;
+
         ChartPlotKind kind = series.Kind ?? plot.Kind;
         bool draws = kind is ChartPlotKind.Line or ChartPlotKind.Scatter or ChartPlotKind.Radar;
 

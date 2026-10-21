@@ -204,6 +204,14 @@ public static class OoxmlXml
             if (element.Element(XName.Get("Fallback", OoxmlNamespaces.MarkupCompatibility)) is null)
                 return false;
 
+            // Writer is the exception: writerfilter does not understand cx1, so a chartex choice
+            // in a document is passed over for its fallback, and a chartex drawing reached without
+            // one imports as nothing at all. Measured on the 26.8 daily with an authored DOCX:
+            // the fallback's text is drawn, and the same drawing outside mc:AlternateContent takes
+            // no room and draws no ink. A run is the only parent the choice has in a document.
+            if (element.Parent?.Name.NamespaceName == OoxmlNamespaces.WordprocessingML)
+                return false;
+
             foreach (XElement data in choice.Descendants(
                          XName.Get("graphicData", OoxmlNamespaces.DrawingML)))
             {

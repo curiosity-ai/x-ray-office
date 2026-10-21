@@ -463,7 +463,9 @@ internal static class XlsxDrawings
 
         return chartSpace is null
             ? null
-            : DrawingChartex.Read(chartSpace, theme, styles, ranges?.Resolver(true));
+            : DrawingChartex.Read(
+                chartSpace, theme, styles, ranges?.Resolver(true),
+                ranges is null ? null : ranges.Expand);
     }
 
     /// <summary>

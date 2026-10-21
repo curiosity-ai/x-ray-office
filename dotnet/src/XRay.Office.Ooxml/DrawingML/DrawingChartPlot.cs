@@ -3132,6 +3132,16 @@ public static class DrawingChartPlot
         if (ranges is null || values is null) return null;
         if (FormulaOf(values) is not { } formula) return null;
 
+        return GeneratedSeriesName(formula);
+    }
+
+    /// <summary>
+    /// The <c>Column C</c> / <c>Row 4</c> name Calc generates for a series whose values are
+    /// <paramref name="formula"/>; see the overload above. The chartex reader calls this with the
+    /// range a <c>_xlchart.v1.n</c> defined name stands for.
+    /// </summary>
+    internal static string? GeneratedSeriesName(string formula)
+    {
         int columns = 0;
         int rows = 0;
         string? firstColumn = null;

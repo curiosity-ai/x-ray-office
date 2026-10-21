@@ -85,6 +85,39 @@ public sealed class OoxmlAlternateContentTests
         root.Value.ShouldNotContain("too old");
     }
 
+    /// <summary>
+    /// In a document the chartex choice loses to its fallback, because writerfilter does not
+    /// understand <c>cx1</c>.
+    /// </summary>
+    /// <remarks>
+    /// Measured on the 26.8 daily with an authored DOCX holding a histogram and a funnel each in a
+    /// <c>Requires="cx1"</c> choice: both render the fallback's text and no chart, while the same
+    /// part in a workbook or a deck is drawn.
+    /// </remarks>
+    [Fact]
+    public void InADocumentTheExtendedChartChoiceLosesToItsFallback()
+    {
+        XElement root = XElement.Parse(
+            $"""
+             <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+                         xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+               <w:body><w:p><w:r>
+                 <mc:AlternateContent>
+                   <mc:Choice xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" Requires="cx1">
+                     <w:drawing><a:graphic><a:graphicData uri="{ExtendedChartUri}"/></a:graphic></w:drawing>
+                   </mc:Choice>
+                   <mc:Fallback><w:t>This chart isn't available in your version of Word.</w:t></mc:Fallback>
+                 </mc:AlternateContent>
+               </w:r></w:p></w:body>
+             </w:document>
+             """);
+        OoxmlXml.Normalise(root);
+
+        root.Descendants().Any(e => e.Name.LocalName == "drawing").ShouldBeFalse();
+        root.Value.ShouldContain("isn't available");
+    }
+
     [Fact]
     public void TheExtendedChartExceptionDoesNotDependOnTheMarkupCompatibilityPrefix()
     {
