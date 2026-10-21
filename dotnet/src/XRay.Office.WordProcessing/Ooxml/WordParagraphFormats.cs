@@ -1054,6 +1054,51 @@ internal static class WordParagraphFormats
     }
 
     /// <summary>
+    /// Whether the interop grab bag writerfilter would give a paragraph holds an auto-spacing entry —
+    /// whatever its value.
+    /// </summary>
+    /// <remarks>
+    /// For <c>DocxLayoutSource.SuppressAutoSpacingInLists</c>, whose rule asks about the entry's
+    /// <em>name</em>: <c>w:beforeAutospacing="0"</c> inserts one as surely as <c>"1"</c> does. The
+    /// innermost layer holding any grab-bag entry decides, because a paragraph's direct grab bag, like a
+    /// style's, replaces the one beneath it rather than adding to it.
+    /// </remarks>
+    /// <param name="styles">The document's styles.</param>
+    /// <param name="paragraphProperties">The paragraph's own <c>w:pPr</c>, or null.</param>
+    /// <param name="before">True for <c>ParaTopMarginBeforeAutoSpacing</c>, false for the bottom twin.</param>
+    internal static bool GrabBagStatesAutoSpacing(
+        WordStyles styles,
+        XElement? paragraphProperties,
+        bool before)
+    {
+        ArgumentNullException.ThrowIfNull(styles);
+
+        string attribute = before ? "beforeAutospacing" : "afterAutospacing";
+
+        // A paragraph's own interop grab bag replaces its style's whole, so the first layer holding any
+        // grab-bag entry answers: the two auto-spacing statements, and a paragraph's `w:cnfStyle`, which
+        // writerfilter files there too (`DomainMapper.cxx`:3820).
+        if (Word.Child(paragraphProperties, "spacing") is { } own && HoldsGrabBag(own))
+            return Word.Attribute(own, attribute) is not null;
+
+        if (Word.Child(paragraphProperties, "cnfStyle") is not null) return false;
+
+        string? styleId = Word.Attribute(Word.Child(paragraphProperties, "pStyle"), "val")
+                          ?? styles.DefaultStyleId(WordStyleType.Paragraph);
+
+        foreach (XElement layer in styles.ParagraphPropertyLayers("spacing", null, styleId))
+        {
+            if (HoldsGrabBag(layer)) return Word.Attribute(layer, attribute) is not null;
+        }
+
+        return false;
+
+        static bool HoldsGrabBag(XElement spacing)
+            => Word.Attribute(spacing, "beforeAutospacing") is not null
+               || Word.Attribute(spacing, "afterAutospacing") is not null;
+    }
+
+    /// <summary>
     /// Whether a paragraph's space before or after is the HTML auto margin rather than a stated one.
     /// </summary>
     /// <remarks>

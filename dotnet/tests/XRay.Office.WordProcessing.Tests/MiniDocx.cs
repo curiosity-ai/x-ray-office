@@ -24,10 +24,12 @@ internal static class MiniDocx
     /// <param name="settings">The children of <c>w:settings</c>.</param>
     /// <param name="sectionProperties">The children of the body's <c>w:sectPr</c>, or null for Letter with
     /// one-inch margins.</param>
+    /// <param name="numbering">The children of <c>w:numbering</c>, or null for no numbering part.</param>
     public static WordProcessingPages Layout(
-        string body, string styles = "", string settings = "", string? sectionProperties = null)
+        string body, string styles = "", string settings = "", string? sectionProperties = null,
+        string? numbering = null)
     {
-        using MemoryStream package = Build(body, styles, settings, sectionProperties);
+        using MemoryStream package = Build(body, styles, settings, sectionProperties, numbering);
         using DocumentSource source = DocumentSource.FromStream(package, "mini.docx");
         using IDocument document = new WordProcessingReader().Read(source);
         return (WordProcessingPages)((IPaginatedDocument)document).Layout();
@@ -35,7 +37,8 @@ internal static class MiniDocx
 
     /// <summary>Builds the package.</summary>
     public static MemoryStream Build(
-        string body, string styles = "", string settings = "", string? sectionProperties = null)
+        string body, string styles = "", string settings = "", string? sectionProperties = null,
+        string? numbering = null)
     {
         const string ContentTypes = """
             <?xml version="1.0" encoding="UTF-8"?>
@@ -48,6 +51,8 @@ internal static class MiniDocx
                         ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
               <Override PartName="/word/settings.xml"
                         ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>
+              <Override PartName="/word/numbering.xml"
+                        ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
             </Types>
             """;
 
@@ -66,6 +71,8 @@ internal static class MiniDocx
                             Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles"/>
               <Relationship Id="rId2" Target="settings.xml"
                             Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings"/>
+              <Relationship Id="rId3" Target="numbering.xml"
+                            Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering"/>
             </Relationships>
             """;
 
@@ -86,6 +93,12 @@ internal static class MiniDocx
                   $"""<?xml version="1.0" encoding="UTF-8"?><w:settings xmlns:w="{W}">{settings}</w:settings>""");
             Write(archive, "word/styles.xml",
                   $"""<?xml version="1.0" encoding="UTF-8"?><w:styles xmlns:w="{W}">{styles}</w:styles>""");
+            if (numbering is not null)
+            {
+                Write(archive, "word/numbering.xml",
+                      $"""<?xml version="1.0" encoding="UTF-8"?><w:numbering xmlns:w="{W}">{numbering}</w:numbering>""");
+            }
+
             Write(archive, "word/document.xml",
                   $"""<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="{W}"><w:body>{body}<w:sectPr>{section}</w:sectPr></w:body></w:document>""");
         }

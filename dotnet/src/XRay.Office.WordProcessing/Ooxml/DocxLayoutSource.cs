@@ -369,6 +369,7 @@ public sealed partial class DocxLayoutSource
 
         List<PageBlock> blocks = [];
         Walk(body, blocks, depth: 0);
+        SuppressAutoSpacingInLists(blocks);
         ParagraphBorderJoin.Apply(blocks);
         return blocks;
     }
@@ -389,6 +390,7 @@ public sealed partial class DocxLayoutSource
         List<PageBlock> blocks = [];
         Walk(element, blocks, depth: 0);
         DropNestedTableFiller(blocks);
+        SuppressAutoSpacingInLists(blocks);
         SuppressAutoSpacingInCell(blocks);
         ParagraphBorderJoin.Apply(blocks);
         return blocks;
@@ -485,6 +487,80 @@ public sealed partial class DocxLayoutSource
     }
 
     /// <summary>
+    /// Drops the space between two paragraphs of one list where an auto-spacing statement says Word
+    /// would.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>DomainMapper_Impl::finishParagraph</c>, tdf#133363
+    /// (<c>sw/source/writerfilter/dmapper/DomainMapper_Impl.cxx</c>:2768-2853). For a numbered paragraph
+    /// whose predecessor is numbered by the same list, the paragraph's space before goes to nought when
+    /// it states <c>w:beforeAutospacing="1"</c> itself, or when the predecessor's interop grab bag merely
+    /// <em>holds</em> a <c>ParaTopMarginBeforeAutoSpacing</c> entry and the two share a paragraph style;
+    /// and the predecessor's space after goes to nought when its grab bag holds
+    /// <c>ParaBottomMarginAfterAutoSpacing</c>. The test is on the entry's name and not its value, and
+    /// <c>DomainMapper.cxx</c>:916-936 inserts the entry for <c>w:beforeAutospacing="0"</c> as well — so a
+    /// document whose <c>w:docDefaults</c> state the attribute switched <em>off</em> still has every
+    /// list item's space before removed.
+    /// </para>
+    /// <para>
+    /// Measured on <c>issue_359_list_whitespace.docx</c>, whose defaults say
+    /// <c>w:beforeAutospacing="0" w:afterAutospacing="0"</c> and whose list paragraphs are <c>Body</c>
+    /// with eight points before: 26.8.1.1 sets the first item 8 pt below the subject and every following
+    /// item with no space before; deleting the two attributes from the defaults makes it set them all
+    /// 8 pt apart, which is what this tree did.
+    /// </para>
+    /// <para>
+    /// Which list counts as "the same" is the effective <c>w:numId</c>: a paragraph numbered directly must
+    /// share it, and one numbered through its style needs only a numbered predecessor
+    /// (<c>|| !isNumberingViaRule</c>). The predecessor is the previous block in the same flow, so a table
+    /// or a cell boundary between them stops the rule, as it stops <c>xPreviousParagraph</c>.
+    /// </para>
+    /// </remarks>
+    private void SuppressAutoSpacingInLists(List<PageBlock> blocks)
+    {
+        for (int i = 1; i < blocks.Count; i++)
+        {
+            if (blocks[i] is not PageParagraph current || blocks[i - 1] is not PageParagraph previous) continue;
+
+            XElement? currentProperties = Word.Child(current.Source as XElement, "pPr");
+            XElement? previousProperties = Word.Child(previous.Source as XElement, "pPr");
+
+            if (ResolveNumbering(currentProperties) is not (string currentList, _)) continue;
+            if (ResolveNumbering(previousProperties) is not (string previousList, _)) continue;
+
+            bool direct = Word.Child(Word.Child(currentProperties, "numPr"), "numId") is not null;
+            if (direct && !string.Equals(currentList, previousList, StringComparison.Ordinal)) continue;
+
+            // `bParaAutoBefore` is set by the paragraph's own `w:beforeAutospacing` alone; the grab bag is
+            // the predecessor's, and then only when the two share a paragraph style.
+            bool ownAuto = Word.Attribute(Word.Child(currentProperties, "spacing"), "beforeAutospacing")
+                is { } stated && stated is not ("0" or "false" or "off");
+            bool autoBefore = ownAuto
+                || (WordParagraphFormats.GrabBagStatesAutoSpacing(_styles, previousProperties, before: true)
+                    && string.Equals(
+                        ParagraphStyleOf(currentProperties), ParagraphStyleOf(previousProperties),
+                        StringComparison.Ordinal));
+
+            if (autoBefore && current.Format.SpaceBefore != Length.Zero)
+            {
+                blocks[i] = current with { Format = current.Format with { SpaceBefore = Length.Zero } };
+            }
+
+            if (WordParagraphFormats.GrabBagStatesAutoSpacing(_styles, previousProperties, before: false)
+                && previous.Format.SpaceAfter != Length.Zero)
+            {
+                blocks[i - 1] = previous with { Format = previous.Format with { SpaceAfter = Length.Zero } };
+            }
+        }
+
+        string ParagraphStyleOf(XElement? properties)
+            => Word.Attribute(Word.Child(properties, "pStyle"), "val")
+               ?? _styles.DefaultStyleId(WordStyleType.Paragraph)
+               ?? string.Empty;
+    }
+
+    /// <summary>
     /// Reads a flow's blocks: a header's or a footer's.
     /// </summary>
     /// <remarks>
@@ -513,6 +589,7 @@ public sealed partial class DocxLayoutSource
         {
             List<PageBlock> blocks = [];
             Walk(element, blocks, depth: 0);
+            SuppressAutoSpacingInLists(blocks);
             ParagraphBorderJoin.Apply(blocks);
             return blocks;
         }
