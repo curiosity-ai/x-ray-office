@@ -158,6 +158,21 @@ public sealed partial record ChartSeries(
     public IReadOnlyList<double?>? XValues { get; init; }
 
     /// <summary>
+    /// Whether this series belongs to a chart type the reference has no plotter for.
+    /// </summary>
+    /// <remarks>
+    /// <c>VSeriesPlotter::createSeriesPlotter</c> hands every chart type it does not know —
+    /// a chartex funnel, waterfall, treemap, sunburst, box-and-whisker, region map, a pareto's
+    /// line, a <c>clusteredColumn</c> without binning — to <c>UnsupportedChart</c>
+    /// (<c>chart2/source/view/charttypes/VSeriesPlotter.cxx</c>:2907, 26-8 branch), which draws no
+    /// mark of the series at all and only <see cref="ChartPlot.UnsupportedNotice"/>. The series
+    /// still takes part in the axes' scaling and in the category count, because the plotter is
+    /// still a <c>VSeriesPlotter</c> that reports its points' minimum and maximum; that is why a
+    /// waterfall's value axis runs over its data while nothing is drawn on it.
+    /// </remarks>
+    public bool IsUnsupported { get; init; }
+
+    /// <summary>
     /// Whether the series draws a marker at each point, and which one.
     /// </summary>
     /// <remarks>
@@ -567,6 +582,45 @@ public sealed partial record ChartPlot
     /// <c>c:majorTickMark</c> on the secondary <c>c:valAx</c>; see <see cref="ValueTicks"/>.
     /// </remarks>
     public ChartTickMark SecondaryTicks { get; init; } = ChartTickMark.Outer;
+
+    /// <summary>Where the value axis puts its minor tick marks.</summary>
+    /// <remarks>
+    /// <para>
+    /// <c>PROP_MinorTickmarks</c>. A minor tick is three quarters of a major one —
+    /// <c>VAxisProperties::makeTickmarkProperties</c>'s <c>nTickLength * 3 / 4</c> for depth 1 —
+    /// and the value axis cuts each major interval into <see cref="ValueMinorIntervals"/> of them.
+    /// Measured on a chartex histogram through the 26.8 daily: minor ticks reach 3.17 pt each side
+    /// of the axis against the major's 4.25.
+    /// </para>
+    /// <para>
+    /// Defaults to <see cref="ChartTickMark.None"/>, and only the chartex reader sets it: a chartex
+    /// axis is created as a non-2007 model, whose <c>mnMinorTickMark</c> defaults to <c>cross</c>
+    /// (<c>oox/source/drawingml/chart/axismodel.cxx</c>:44). The <c>c:</c> reader states nothing
+    /// here yet, which leaves every non-chartex chart exactly as it was drawn.
+    /// </para>
+    /// </remarks>
+    public ChartTickMark ValueMinorTicks { get; init; } = ChartTickMark.None;
+
+    /// <summary>Where the category axis puts its minor tick marks.</summary>
+    /// <remarks>
+    /// One per category interval, at its middle — <see cref="CategoryMinorIntervals"/> — which on
+    /// a shifted axis is under each category's centre. See <see cref="ValueMinorTicks"/>.
+    /// </remarks>
+    public ChartTickMark CategoryMinorTicks { get; init; } = ChartTickMark.None;
+
+    /// <summary>
+    /// The text <c>UnsupportedChart</c> draws over the chart, or null when every series has a
+    /// plotter.
+    /// </summary>
+    /// <remarks>
+    /// <c>STR_UNSUPPORTED_CHART_TYPE</c>, "One or more chart types are unsupported in this version
+    /// of %PRODUCTNAME" (<c>chart2/inc/strings.hrc</c>). <c>UnsupportedChart::createShapes</c>
+    /// (<c>chart2/source/view/charttypes/UnsupportedChart.cxx</c>:69-111, 26-8 branch) sets it
+    /// at 10 pt, centred, in a white box with a white outline, on the centre of the chart's page
+    /// and wrapped at two thirds of its width; the title, the axes, the gridlines and the legend
+    /// are drawn around it as for any other chart.
+    /// </remarks>
+    public string? UnsupportedNotice { get; init; }
 
     /// <summary>Whether the chart has a pair of axes at all.</summary>
     /// <remarks>
