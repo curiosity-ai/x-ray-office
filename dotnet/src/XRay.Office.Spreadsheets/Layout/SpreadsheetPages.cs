@@ -169,8 +169,9 @@ public sealed class SheetPage : IPage, IPageRenderLimits
 /// workbook-wide and slightly surprising. Calc prints every visible sheet — but as soon as
 /// <em>any</em> sheet in the workbook declares a print range, the sheets that declare none are
 /// printed only if their own "print entire sheet" flag is still set
-/// (<c>ScPrintFunc::InitParam</c>, <c>sc/source/ui/view/printfun.cxx:1022-1046</c>). A hidden
-/// sheet is never printed, which is the one place layout and extraction deliberately disagree:
+/// (<c>ScPrintFunc::InitParam</c>, <c>sc/source/ui/view/printfun.cxx:1018-1048</c>). A hidden
+/// sheet is not printed unless it declares a print range of its own — see
+/// <see cref="IsPrinted"/> — which is the one place layout and extraction deliberately disagree:
 /// extraction keeps hidden sheets and flags them.
 /// </para>
 /// </remarks>
@@ -219,14 +220,24 @@ public sealed class SpreadsheetPages : IPageSequence
     /// Whether any sheet in the workbook declares a print range, which is what makes the
     /// per-sheet flag matter at all.
     /// </param>
+    /// <remarks>
+    /// <c>ScPrintFunc::InitParam</c> (<c>sc/source/ui/view/printfun.cxx</c>:1018-1048, identical
+    /// in 26.8.1.1) asks about visibility in two of its three arms and <strong>not</strong> in the
+    /// one that matters here: when the workbook has a print range anywhere and this sheet states
+    /// one of its own, the sheet is printed whether or not it is hidden. Only a sheet printed for
+    /// its "print entire sheet" flag, or one printed because no sheet states a range, has to be
+    /// visible. So a hidden lookup sheet with a <c>Print_Area</c> prints: measured on
+    /// <c>calc-probes/hidden-printarea.xlsx</c>, 26.8.1.1 gives 2 pages and prints the hidden
+    /// sheet's text where this tree gave 1. (Master's 8bca7a7c3f6e skips it; 26.8.1.1 does not.)
+    /// </remarks>
     public static bool IsPrinted(SheetLayout sheet, bool anySheetHasPrintRange)
     {
         ArgumentNullException.ThrowIfNull(sheet);
 
-        if (sheet.IsHidden) return false;
-        if (!anySheetHasPrintRange) return true;
+        if (!anySheetHasPrintRange) return !sheet.IsHidden;
+        if (sheet.Setup.PrintAreas.Count > 0) return true;
 
-        return sheet.Setup.PrintAreas.Count > 0 || sheet.Setup.PrintsEntireSheet;
+        return sheet.Setup.PrintsEntireSheet && !sheet.IsHidden;
     }
 
     private static List<SheetPage> Build(IReadOnlyList<SheetLayout> sheets, LayoutOptions options)
