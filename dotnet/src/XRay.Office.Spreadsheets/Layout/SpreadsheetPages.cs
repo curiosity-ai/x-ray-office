@@ -490,7 +490,13 @@ internal sealed class SheetPageDrawing(SheetLayout sheet, SheetPagePlacement pla
 
             // After the grid and before the headings, which is Calc's own order: a picture is on
             // the front drawing layer and covers the gridlines under it (printfun.cxx:1695-1703).
-            _graphics.Draw(sink, columns, rows);
+            // The page's body, inside its margins, is the area the drawing layer sees: it clips a
+            // glow at the left margin and not at the last printed row. See `ShapeEffects`.
+            _graphics.Draw(
+                sink, columns, rows,
+                new DocRect(origin, new DocSize(
+                    sheet.Setup.PageSize.Width - origin.X - origin.X,
+                    sheet.Setup.PageSize.Height - origin.Y - origin.Y)));
 
             _decoration.DrawHeadings(HeadingOrigin, columns, rows, sink);
             _decoration.DrawHeaderAndFooter(context ?? new SheetHeaderContext(), sink);

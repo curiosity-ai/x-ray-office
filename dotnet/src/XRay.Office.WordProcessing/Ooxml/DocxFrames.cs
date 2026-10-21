@@ -308,6 +308,8 @@ internal static class DocxFrames
             ZOrder = ZOrder(anchor),
             Preset = preset,
             Adjustments = adjustments,
+            Glow = Glow(placed, shapeProperties, context),
+            SoftEdge = SoftEdge(placed, shapeProperties),
             FillOutline = fillOutline,
             StrokeOutline = strokeOutline,
             IsLine = isLine,
@@ -340,6 +342,37 @@ internal static class DocxFrames
             GrowsToContent = box is not null && FitsShapeToText(placed),
             HeightFloor = box is not null && FitsShapeToText(placed) ? Length.Zero : null,
         };
+    }
+
+    /// <summary>
+    /// A shape's or a picture's glow: <c>a:effectLst/a:glow</c> on its own <c>spPr</c>, which
+    /// Writer draws as Impress does — it is an <c>SdrObject</c> attribute and <c>svx</c>'s shape
+    /// primitives add it. Measured on a 113 × 85 pt <c>wps:wsp</c> rectangle with an 18 pt glow:
+    /// two images reaching 36 and 18 pt, as on a slide.
+    /// </summary>
+    private static ShapeGlow? Glow(XElement placed, XElement? properties, DocxFrameContext context)
+        => DrawingEffects.Glow(properties is null ? null : Child(properties, "effectLst"), context.Theme) is { } glow
+            ? new ShapeGlow(glow.Colour, glow.Radius, AppliesEffectsTwice(placed, properties))
+            : null;
+
+    /// <summary>A shape's or a picture's soft edge, as <see cref="Glow"/>.</summary>
+    private static ShapeSoftEdge? SoftEdge(XElement placed, XElement? properties)
+        => DrawingEffects.SoftEdge(properties is null ? null : Child(properties, "effectLst")) is { } radius
+            ? new ShapeSoftEdge(radius, AppliesEffectsTwice(placed, properties))
+            : null;
+
+    /// <summary>
+    /// Whether a shape is a rectangle custom shape, whose effects apply twice — see
+    /// <see cref="ShapeGlow.Twice"/>. A picture is a graphic object and takes them once.
+    /// </summary>
+    private static bool AppliesEffectsTwice(XElement placed, XElement? properties)
+    {
+        if (properties?.Parent?.Name.LocalName != "wsp") return false;
+        if (properties is null) return true;
+        if (Child(properties, "custGeom") is not null) return false;
+
+        return Child(properties, "prstGeom") is not { } preset
+               || preset.Attribute("prst")?.Value is null or "rect";
     }
 
     /// <summary>The <c>wpg:wgp</c> a drawing's graphic data holds, or null when it holds something else.</summary>

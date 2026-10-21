@@ -85,7 +85,8 @@ internal sealed class SheetPageGraphics(SheetLayout sheet, double scale)
     /// <param name="sink">Receives the drawing commands.</param>
     /// <param name="columns">The columns on the page, with their positions.</param>
     /// <param name="rows">The rows on the page.</param>
-    public void Draw(IDrawingSink sink, List<PlacedColumn> columns, List<PlacedRow> rows)
+    /// <param name="visible">The page's body, which clips a drawing's glow and soft edge.</param>
+    public void Draw(IDrawingSink sink, List<PlacedColumn> columns, List<PlacedRow> rows, DocRect visible)
     {
         ArgumentNullException.ThrowIfNull(sink);
         ArgumentNullException.ThrowIfNull(columns);
@@ -100,10 +101,10 @@ internal sealed class SheetPageGraphics(SheetLayout sheet, double scale)
         // with `ClipPath`, which would have cut those glyphs out of the text layer and moved the
         // gate's own character count. Both survived a clean auto-merge; this one is the measured
         // one (`probes/ink-pass-r92`, 74 renderings, summed |ink| 316.40 -> 227.20).
-        DrawInside(sink, columns, rows);
+        DrawInside(sink, columns, rows, visible);
     }
 
-    private void DrawInside(IDrawingSink sink, List<PlacedColumn> columns, List<PlacedRow> rows)
+    private void DrawInside(IDrawingSink sink, List<PlacedColumn> columns, List<PlacedRow> rows, DocRect visible)
     {
         Dictionary<int, PlacedColumn> byColumn = [];
         foreach (PlacedColumn column in columns) byColumn.TryAdd(column.Column, column);
@@ -159,7 +160,7 @@ internal sealed class SheetPageGraphics(SheetLayout sheet, double scale)
 
             try
             {
-                DrawInside(sink, drawing, box, paintsParts, paintsPartInk);
+                DrawInside(sink, drawing, box, visible, paintsParts, paintsPartInk);
             }
             finally
             {
@@ -170,7 +171,40 @@ internal sealed class SheetPageGraphics(SheetLayout sheet, double scale)
 
     /// <summary>Everything one drawing puts on the page, inside whatever clip is in force.</summary>
     private void DrawInside(
-        IDrawingSink sink, SheetDrawing drawing, DocRect box, bool paintsParts, bool paintsPartInk)
+        IDrawingSink sink, SheetDrawing drawing, DocRect box, DocRect visible, bool paintsParts, bool paintsPartInk)
+    {
+        void Geometry(IDrawingSink target) => DrawGeometry(target, drawing, box);
+
+        // A glow under the shape and a soft edge in place of its fill, picture and outline, both
+        // under its text — the order `SdrCustomShapePrimitive2D` builds them in. See
+        // `ShapeEffects`; the visible area is the page's body, which is what clips the reference's
+        // glow: the outer of two 18 pt glows starts 18 pt left of the left margin, and runs past
+        // the last printed row untouched.
+        IReadOnlyList<EffectLayer> glow = drawing.Glow is { } stated
+            ? ShapeEffects.Glow(Content(drawing, box, Geometry), stated.Colour, Scaled(stated.Radius), stated.Twice, visible, sink)
+            : [];
+        foreach (EffectLayer layer in glow) sink.DrawImage(layer.Image, layer.Destination);
+
+        if (drawing.SoftEdge is { } soft
+            && ShapeEffects.SoftEdge(Content(drawing, box, Geometry), Scaled(soft.Radius), soft.Twice, visible, sink)
+                is { } softened)
+        {
+            sink.DrawImage(softened.Image, softened.Destination);
+        }
+        else
+        {
+            Geometry(sink);
+        }
+
+        // Not an `else`: a shape may carry both a picture and a caption, and the text goes
+        // over the fill rather than instead of it.
+        if (drawing.Text is { } text) SheetShapePainter.Draw(sink, text, box, scale);
+
+        if (paintsParts || paintsPartInk) DrawParts(sink, box, drawing.Parts);
+    }
+
+    /// <summary>A drawing's ink and picture — everything but its text and its group's parts.</summary>
+    private void DrawGeometry(IDrawingSink sink, SheetDrawing drawing, DocRect box)
     {
         // The box before anything inside it. A shape carrying a fill paints it under its own
         // text rather than instead of it, and under the cells' text rather than over it: the
@@ -194,13 +228,30 @@ internal sealed class SheetPageGraphics(SheetLayout sheet, double scale)
         else if (drawing.Image is { } image)
             DrawPicture(sink, box, drawing.Crop, null, image, drawing.Opacity);
         else if (drawing.Chart is { } chart) SheetChart.Draw(sink, chart, box, scale);
-
-        // Not an `else`: a shape may carry both a picture and a caption, and the text goes
-        // over the fill rather than instead of it.
-        if (drawing.Text is { } text) SheetShapePainter.Draw(sink, text, box, scale);
-
-        if (paintsParts || paintsPartInk) DrawParts(sink, box, drawing.Parts);
     }
+
+    /// <summary>What a drawing's glow and soft edge are computed from.</summary>
+    private EffectContent Content(SheetDrawing drawing, DocRect box, Action<IDrawingSink> draw)
+    {
+        bool picture = drawing.Image is not null || drawing.Vector is not null;
+        bool filled = drawing.Fill is not null || drawing.Gradient is not null || drawing.Texture is not null || picture;
+        GraphicsPath outline = SheetShapeInk.Outline(
+            box, picture ? null : drawing.Preset, drawing.Adjustments, drawing.FlipHorizontal, drawing.FlipVertical);
+        bool solid = drawing.Fill is not null && drawing.Gradient is null && drawing.Texture is null
+                     && drawing.Stroke is null && !picture;
+
+        return new EffectContent
+        {
+            Fill = filled ? [outline] : [],
+            Stroke = drawing.Stroke is not null ? [outline] : [],
+            StrokeWidth = Scaled(drawing.StrokeWidth),
+            SolidColour = solid ? drawing.Fill : null,
+            Draw = solid ? null : draw,
+            MaskFromPixels = picture,
+        };
+    }
+
+    private Length Scaled(Length length) => Length.FromEmu((long)Math.Round(length.Emu * scale));
 
     /// <summary>
     /// Draws the pictures held by the leaf shapes of a group, each in its own part of the box.
