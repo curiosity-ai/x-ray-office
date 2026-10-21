@@ -398,9 +398,9 @@ public readonly record struct Os2Table(
     /// <remarks>
     /// Bits 17 to 20 of <c>ulCodePageRange1</c> — CP932 Japanese, CP936 Simplified Chinese, CP949
     /// Korean and CP950 Traditional Chinese — which is exactly the set
-    /// <c>vcl::CodePageCoverage</c> names and <c>lcl_ApplyCjkHeightAdjustment</c> tests
-    /// (<c>include/vcl/fontcapabilities.hxx</c>:169-172,
-    /// <c>sw/source/core/txtnode/fntcache.cxx</c>:283-286).
+    /// <c>vcl::CodePageCoverage</c> names and <c>lcl_FontHasCJKCodePages</c> tests
+    /// (<c>include/vcl/fontcapabilities.hxx</c>:169-172; in 26.2.4.2 the same four bits were
+    /// <c>lcl_ApplyCjkHeightAdjustment</c>'s, <c>sw/source/core/txtnode/fntcache.cxx</c>:283-286).
     /// <para>
     /// It is a claim about the <em>font</em> and not about the text: Word scales the line for a face
     /// that self-reports this coverage even where the run holds nothing but Latin, which is the whole

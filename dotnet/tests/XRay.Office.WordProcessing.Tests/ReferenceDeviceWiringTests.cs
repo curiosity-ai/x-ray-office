@@ -41,9 +41,9 @@ public sealed class ReferenceDeviceWiringTests
     {
         // `AsWordDocument` is the document's `MS_WORD_COMP_GRID_METRICS` compatibility flag rather
         // than a property of the device — it travels beside the resolution because
-        // `lcl_ApplyCjkHeightAdjustment` is asked both questions at once. It is off by default and
-        // the Word filters turn it on, which is measurable: the same two lines of WenQuanYi Zen Hei
-        // at 12 pt are 406 twips apart out of a .docx and 325 out of a .fodt. See
+        // `SwTextFormatter::CalcAscent` asks both questions at once. It is off by default and the Word
+        // filters turn it on, which is measurable: the same two lines of WenQuanYi Zen Hei at 12 pt are
+        // 412 twips apart out of a .docx on 26.8.1.1 and 325 out of a .fodt. See
         // `EastAsianLineScaleTests`.
         Paragraphs(printerMetrics: false)
             .ShouldAllBe(paragraph => paragraph.Metrics!.Value.ScalesEastAsianFaces);

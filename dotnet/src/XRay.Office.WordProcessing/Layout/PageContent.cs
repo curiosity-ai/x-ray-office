@@ -737,8 +737,15 @@ public sealed record PageParagraph : PageBlock
                 Tracking: Tracking, WidthPerCent: WidthPerCent, Item: Item));
         }
 
+        // A paragraph on a page's text grid does not take Word's 127 % East Asian line height:
+        // 26.8.1.1's `SwTextFormatter::CalcAscent` asks `pGrid && rInf.SnapToGrid()` first (tdf#171275).
+        // Nor does an empty paragraph, whose line holds no text portion for `CalcAscent` to scale.
+        MetricGrid? metrics = (Format.TextGrid is not null || Text.Length == 0) && Metrics is { } grid
+            ? grid with { ScalesEastAsianFaces = false }
+            : Metrics;
+
         return MeasuredParagraph.Measure(
-            Text, runs, shaper: null, Itemisation, MeasurementObjects(), Metrics,
+            Text, runs, shaper: null, Itemisation, MeasurementObjects(), metrics,
             BlanksAreTransparentToHeight, WriterLineBox.LeadingAboveText, AddsScriptSpace);
     }
 

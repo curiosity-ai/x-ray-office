@@ -1208,10 +1208,19 @@ internal static class WordParagraphFormats
     private static LineSpacingRule Spacing(XElement? spacing)
     {
         if (Word.Attribute(spacing, "line") is not { } text
-            || !Word.Long(text, out long line)
-            || line == 0)
+            || !Word.Long(text, out long line))
         {
             return LineSpacingRule.SingleSpaced;
+        }
+
+        // An at-least rule of nought is kept, because it is not single spacing everywhere: on a page's text
+        // grid it takes the line off the grid altogether (tdf#164871, `itrform2.cxx`:2298-2306). Off the
+        // grid `max(natural, 0)` is the natural height, which is what single spacing gave it.
+        if (line == 0)
+        {
+            return Word.Attribute(spacing, "lineRule") == "atLeast"
+                ? LineSpacingRule.AtLeast(Length.Zero)
+                : LineSpacingRule.SingleSpaced;
         }
 
         return Word.Attribute(spacing, "lineRule") switch

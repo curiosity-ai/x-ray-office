@@ -60,6 +60,9 @@ public sealed partial class DocxLayoutSource
 
     /// <summary>Whether the document states <c>w:ulTrailSpace</c>; see <see cref="PageParagraph.DecoratesTrailingBlank"/>.</summary>
     private readonly bool _underlinesTrailingSpace;
+
+    /// <summary>Whether the document states <c>w:adjustLineHeightInTable</c>; see <see cref="TextGridSnap"/>.</summary>
+    private readonly bool _adjustsLineHeightInTable;
     private readonly int _compatibilityMode;
 
     /// <summary>What <c>w:beforeAutospacing</c> and <c>w:afterAutospacing</c> stand for here.</summary>
@@ -154,6 +157,7 @@ public sealed partial class DocxLayoutSource
         WordCompatibility compatibility = WordCompatibility.Read(settings);
         _autoSpacing = AutoSpacing(settings, compatibility);
         _underlinesTrailingSpace = compatibility.UnderlinesTrailingSpace;
+        _adjustsLineHeightInTable = compatibility.AdjustsLineHeightInTable;
         // `AsWordDocument` is the MS_WORD_COMP_GRID_METRICS compatibility flag, which the Word
         // filters set and ODF's does not. See MetricGrid.AsWordDocument.
         _metrics = (compatibility.UsesPrinterMetrics ? MetricGrid.Printer : MetricGrid.Reference)
@@ -358,6 +362,7 @@ public sealed partial class DocxLayoutSource
         _pendingBelowTarget = -1;
         _indexFieldDepth = 0;
         _sectionLeftMargins = LeftMargins(body);
+        _sectionGridPitches = GridPitches(body);
 
         // Before the walk, because a REF may name a bookmark the walk has not reached yet -- which in
         // a document whose references point forward is most of them. See `DocxReferenceFields`.
@@ -372,7 +377,16 @@ public sealed partial class DocxLayoutSource
         _numbering.ResetCounters();
 
         List<PageBlock> blocks = [];
-        Walk(body, blocks, depth: 0);
+        _inBody = true;
+        try
+        {
+            Walk(body, blocks, depth: 0);
+        }
+        finally
+        {
+            _inBody = false;
+        }
+
         SuppressAutoSpacingInLists(blocks);
 
         // The first-section arm of the rule `SuppressAutoSpacingInShape` ports: the document's first
@@ -665,6 +679,75 @@ public sealed partial class DocxLayoutSource
             .Descendants(Word.Name("sectPr"))
             .Select(section => Twips(Word.Child(section, "pgMar"), "left")
                                ?? PageGeometry.Letter.Margins.Left)];
+
+    /// <summary>
+    /// Each section's text-grid pitch, in the order the body states them, or null for a section without a
+    /// grid.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>w:docGrid</c>, as <c>DomainMapper</c> (<c>sw/source/writerfilter/dmapper/DomainMapper.cxx</c>:1253-1295)
+    /// and <c>SectionPropertyMap::CloseSectionGroup</c> (<c>PropertyMap.cxx</c>:1942-1966, 2034) read it: the
+    /// type <c>default</c> (and an absent type) is no grid; <c>lines</c>, <c>linesAndChars</c> and
+    /// <c>snapToChars</c> all snap lines. The pitch travels through hundredths of a millimetre and back to
+    /// twips, each step rounded, and one outside 1 to 31680 twips is read as 1; a grid whose line count
+    /// would not fit a 16-bit integer is dropped. An absent <c>w:linePitch</c> is that same 1.
+    /// </para>
+    /// <para>
+    /// Only the vertical half: a character grid's widths are not modelled, and nor is the ruby height,
+    /// which a DOCX grid always states as nought.
+    /// </para>
+    /// </remarks>
+    private static List<Length?> GridPitches(XElement body)
+        => [.. body
+            .Descendants(Word.Name("sectPr"))
+            .Where(section => section.Parent is not { } parent || !Word.Is(parent, "sectPrChange"))
+            .Select(GridPitch)];
+
+    private static Length? GridPitch(XElement section)
+    {
+        XElement? grid = Word.Child(section, "docGrid");
+        string? type = Word.Attribute(grid, "type");
+        if (grid is null || type is null or "default") return null;
+        if (type is not ("lines" or "linesAndChars" or "snapToChars")) return null;
+
+        long twips = Word.Integer(Word.Attribute(grid, "linePitch"), out int stated) ? stated : 1;
+        long mm100 = (long)Math.Round(twips * 127.0 / 72.0, MidpointRounding.AwayFromZero);
+        if (mm100 < 1 || mm100 > 31680) mm100 = 1;
+
+        long pitch = Math.Max(1, (long)Math.Round(mm100 * 72.0 / 127.0, MidpointRounding.AwayFromZero));
+        return Length.FromTwips(pitch);
+    }
+
+    /// <summary>The text grid a paragraph being read now snaps to, or null.</summary>
+    /// <remarks>
+    /// Only the body's own paragraphs, the ones Writer's <c>IsInDocBody</c> answers yes for, and only where
+    /// the paragraph's <c>w:snapToGrid</c> — on unless a layer turns it off — says so
+    /// (<c>sw/source/core/text/inftxt.cxx</c>:334). A cell's paragraph snaps only when the document states
+    /// <c>w:adjustLineHeightInTable</c>; otherwise it still counts as snapping for the East Asian height
+    /// but takes no line spacing at all. See <see cref="TextGridSnap"/>.
+    /// </remarks>
+    private TextGridSnap? TextGridOf(XElement? properties)
+    {
+        if (!_inBody || InHeaderFooter || _frameDepth > 0 || _noteDepth > 0) return null;
+        if (_sectionGridPitches.Count == 0) return null;
+        if (_sectionGridPitches[Math.Clamp(_sectionIndex, 0, _sectionGridPitches.Count - 1)] is not { } pitch)
+            return null;
+
+        WordProperty snap = _styles.ResolveParagraphProperty(
+            "snapToGrid",
+            properties,
+            Word.Value(properties, "pStyle") ?? _styles.DefaultStyleId(WordStyleType.Paragraph));
+        if (snap.HasValue && !snap.IsOn) return null;
+
+        return new TextGridSnap(pitch, _tableDepth == 0 || _adjustsLineHeightInTable);
+    }
+
+    /// <summary>True while <see cref="Read"/> walks the body, for <see cref="TextGridOf"/>.</summary>
+    private bool _inBody;
+
+    /// <summary>Each section's grid pitch; see <see cref="GridPitches"/>.</summary>
+    private List<Length?> _sectionGridPitches = [];
 
     /// <summary>
     /// The left margin of the section the walk is in, for a page-anchored table's offset.
@@ -1054,9 +1137,9 @@ public sealed partial class DocxLayoutSource
             Colour = text.Colour ?? Colour.Transparent,
             Shading = ShadeColour(WordParagraphFormats.ShadingOf(_styles, properties)),
             Borders = ParagraphBorders(properties),
-            Format = breaksPage || walker.BreaksPageHere
+            Format = (breaksPage || walker.BreaksPageHere
                 ? format with { StartsNewPage = true }
-                : format,
+                : format) with { TextGrid = TextGridOf(properties) },
             Label = label,
 
             // #i3952#: a tab or a run of spaces does not raise a line's height in a Word document, and a
