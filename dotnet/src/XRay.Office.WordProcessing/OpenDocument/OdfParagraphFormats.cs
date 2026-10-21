@@ -462,39 +462,87 @@ internal static class OdfParagraphFormats
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The innermost level that states a size at all wins, which is ordinary containment inheritance. What
-    /// is not ordinary is the percentage: <c>fo:font-size="150%"</c> is 150% of the <em>item pool's</em>
-    /// twelve points, not of the enclosing text's size and not of the style's parent's either.
+    /// The innermost level whose style chain states a size wins, which is ordinary containment inheritance.
+    /// What is not ordinary is the percentage, and it means two different things depending on which of ODF's
+    /// containers the style is in.
     /// </para>
     /// <para>
-    /// That is measured, and it is measured because it is surprising. A 150% span inside an 11 pt paragraph
-    /// renders at 18 pt rather than 16.5, and a 150% style whose <c>style:parent-style-name</c> declares
-    /// 20 pt also renders at 18 rather than 30. The cause is where xmloff applies it: a percentage arrives
-    /// as <c>CharPropHeight</c>, and <c>SvxFontHeightItem</c> resolves a proportion against the height the
-    /// item set holds <em>at that moment</em> — which, for a style being built up from nothing, is the pool
-    /// default. The parent chain is resolved later, so it never enters the arithmetic, and nested
-    /// percentages do not compound for the same reason.
+    /// <b>On a named style it is a proportion of the style's own parent</b>, resolved the same way up the
+    /// chain: <c>Heading 1</c> at <c>115%</c> under a <c>Heading</c> of 14 pt is 16.1 pt, a 120 % child of
+    /// that is 19.3, and a named style with no parent takes its proportion of the document default. xmloff
+    /// sets the percentage as <c>CharPropHeight</c>, which <c>SvxFontHeightItem::PutValue</c> applies to the
+    /// height in effect (<c>editeng/source/items/textitem.cxx</c>:981-995), and <c>SwTextFormatColl</c>
+    /// recalculates a relative height whenever its parent changes or its parent's height does
+    /// (<c>sw/source/core/doc/fmtcol.cxx</c>:351-371) — so the order the styles are declared in does not
+    /// matter. A named character style is the same, against its own chain and not against the paragraph it
+    /// is used in.
+    /// </para>
+    /// <para>
+    /// <b>On an automatic style it is ignored</b>, and the size is whatever the level outside it has: a
+    /// <c>115%</c> automatic paragraph style over that 14 pt <c>Heading</c> draws 14 pt, and a <c>150%</c>
+    /// span inside an 11 pt paragraph draws 11.
+    /// </para>
+    /// <para>
+    /// Measured on 26.8.1.1 (and 26.2.4.2, identically) over twelve one-attribute cases in one flat document,
+    /// and on <c>odt/extraction_test.odt</c> with its <c>Heading</c> changed to 20 pt (<c>Heading 1</c> then
+    /// draws 23 pt) and renamed to a custom style (still 16.1). <b>What this replaces said the opposite</b> —
+    /// a percentage of the pool's 12 pt everywhere — and the probe that measured it had no
+    /// <c>office:master-styles</c>: without one, Writer's ODF import never finishes the named styles, so no
+    /// parent is linked and every named style resolves against the default. A hand-written ODF probe of style
+    /// inheritance needs a master page.
     /// </para>
     /// </remarks>
     private static Length SizeIn(OdfStyles styles, IReadOnlyList<OdfStyleReference> cascade)
     {
         for (int i = cascade.Count - 1; i >= 0; i--)
         {
-            OdfProperty stated = Own(styles, cascade[i], OdfNamespaces.FoCompatible, "font-size");
-            if (!stated.HasValue) continue;
-
-            if (stated.AsPercentage() is { } proportion and > 0 and < 100)
-            {
-                return OdfWriterUnits.ToCore(DefaultSize * proportion);
-            }
-
-            if (stated.AsLength() is { } absolute) return OdfWriterUnits.ToCore(absolute);
+            if (ChainSize(styles, cascade, cascade[i].Name, cascade[i].Family, 0) is { } stated)
+                return OdfWriterUnits.ToCore(stated);
         }
 
-        return OdfWriterUnits.ToCore(
-            Defaulted(styles, cascade, OdfNamespaces.FoCompatible, "font-size").AsLength()
-            ?? DefaultSize);
+        return OdfWriterUnits.ToCore(DocumentDefaultSize(styles, cascade));
     }
+
+    /// <summary>The size a style chain states, or null when nothing in it states one that counts.</summary>
+    private static Length? ChainSize(
+        OdfStyles styles,
+        IReadOnlyList<OdfStyleReference> cascade,
+        string? name,
+        OdfStyleFamily family,
+        int depth)
+    {
+        for (OdfStyle? style = styles.Find(name, family);
+             style is not null && depth < OdfStyles.MaxParentChainDepth;
+             style = styles.Find(style.ParentStyleName, family), depth++)
+        {
+            if (style.GetOwnProperty(OdfPropertyKind.Text, OdfNamespaces.FoCompatible, "font-size")
+                is not { } raw)
+            {
+                continue;
+            }
+
+            OdfProperty own = new(raw, OdfPropertyOrigin.SetHere, style.Name);
+
+            if (own.AsPercentage() is { } proportion)
+            {
+                if (style.Source == OdfStyleSource.Automatic || proportion <= 0) continue;
+
+                // Integer twips, as SvxFontHeightItem holds them: 280 × 115 / 100 is 322, 16.1 pt.
+                Length parent = ChainSize(styles, cascade, style.ParentStyleName, family, depth + 1)
+                    ?? DocumentDefaultSize(styles, cascade);
+                long percent = (long)Math.Round(proportion * 100);
+                return Length.FromTwips(OdfWriterUnits.ToCore(parent).Twips * percent / 100);
+            }
+
+            if (own.AsLength() is { } absolute) return absolute;
+        }
+
+        return null;
+    }
+
+    /// <summary>The size of text no style sizes: the family defaults, else Writer's 12 pt.</summary>
+    private static Length DocumentDefaultSize(OdfStyles styles, IReadOnlyList<OdfStyleReference> cascade)
+        => Defaulted(styles, cascade, OdfNamespaces.FoCompatible, "font-size").AsLength() ?? DefaultSize;
 
     /// <summary>
     /// The absolute size a named character style states, or null when it states none.
