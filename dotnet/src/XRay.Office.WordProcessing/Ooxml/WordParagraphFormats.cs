@@ -349,8 +349,11 @@ internal static class WordParagraphFormats
 
             SpaceBefore = AutoOr(spacings, "beforeAutospacing", "before", auto),
             SpaceAfter = AutoOr(spacings, "afterAutospacing", "after", auto),
+            // A table style's own `w:contextualSpacing` reaches its cells as it does in Word; 26.8.1.1
+            // drops it, and the switch reproduces that. See `TODO.word-parity.md`.
             HasContextualSpacing =
-                IsOn(styles, paragraphProperties, styleId, "contextualSpacing", tableStyle),
+                IsOn(styles, paragraphProperties, styleId, "contextualSpacing",
+                     WordParity.ReproduceLibreOffice ? null : tableStyle),
 
             // Which style, for the "same style" half of contextual spacing. Already resolved to the
             // document's default when the paragraph names none, so two unstyled paragraphs match.
