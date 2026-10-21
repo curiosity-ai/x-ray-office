@@ -238,9 +238,11 @@ public class ChartTitlePlacementTests
 
         title.At.Y.Points.ShouldBe(diagramCentre.Points, 0.001);
 
-        // The rotated title's width is its shape's height: 1.15 em of text plus two 0.30 em
-        // insets.
-        Length width = drawing.Labels.Single(label => label.Text == "Gallons Per Hour").Size * 1.75;
+        // The rotated title's width is its shape's height: 1.15 em of text plus two insets, each
+        // round(423 x 0.30) = 127 hundredths whatever the title's size since the 26.8 retarget
+        // (2026-10-21) -- the daily sizes a title's insets by the model's 12 pt default.
+        Length width = drawing.Labels.Single(label => label.Text == "Gallons Per Hour").Size * 1.15
+                       + Length.FromMm100(127 * 2);
         title.At.X.Points.ShouldBe(
             (diagram.X - width / 2 - Frame.Width * 0.02).Points, 0.01);
     }
@@ -270,7 +272,7 @@ public class ChartTitlePlacementTests
 
         // The category labels hang from the plot's bottom edge, one 1.15 em line deep.
         Length labelsBottom = q1.At.Y + q1.Size * 1.15;
-        Length belowHeight = below.Size * 1.75;
+        Length belowHeight = below.Size * 1.15 + Length.FromMm100(127 * 2);
         below.At.Y.Points.ShouldBe(
             (labelsBottom + Frame.Height * 0.02 + belowHeight / 2).Points, 0.01);
 

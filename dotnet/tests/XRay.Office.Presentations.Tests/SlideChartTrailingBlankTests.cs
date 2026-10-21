@@ -37,14 +37,24 @@ namespace XRay.Office.Presentations.Tests;
 /// <c>slide-chart-accounting-axis.pptx</c> is <c>chart-bar-deck.pptx</c> with the accounting code
 /// on its value axis and nothing else changed, so the <em>only</em> difference from a deck this
 /// suite already asserts exactly is the format. 26.2.4.2 draws its grey wall from x = 131.41 pt;
-/// this tree drew 128.70 and now draws 131.41.
+/// this tree drew 128.70 and then 131.41.
+/// </para>
+/// <para>
+/// <strong>Retargeted to the 26.8 daily on 2026-10-21.</strong> The daily draws the same wall
+/// from <b>133.23</b>, 1.82 pt right, because a rotated value-axis title's insets are now sized by
+/// the chart model's 12 pt default rather than by its own 9 pt (<c>ChartLayout.TitleInsetEm</c>) —
+/// the band the labels reserve, blank included, is unchanged. And the daily draws each label's
+/// glyphs half its trailing blank further right inside that band, because it centres a line on
+/// its visible text (tdf#168135, <c>ChartLayout.OnVisibleText</c>): <c>$180.00</c> starts at
+/// 89.54 against 26.2.4.2's 86.37, of which 1.82 is the wall and 1.36 the half blank.
 /// </para>
 /// </remarks>
 public class SlideChartTrailingBlankTests
 {
     /// <summary>
     /// A twentieth of a point. The quantity under test is 2.71, so this is far finer than it
-    /// needs to be — it is loose only against the last bit of an EMU division.
+    /// needs to be — it is loose only against the last bit of an EMU division and the 0.02 pt the
+    /// composition is from the daily on this deck.
     /// </summary>
     private const double Tolerance = 0.05;
 
@@ -89,14 +99,48 @@ public class SlideChartTrailingBlankTests
     /// <remarks>
     /// The left edge alone is the assertion, because it is the only edge the value labels decide:
     /// the wall's right edge is 606.76 in the reference and 606.79 here before and after, which is
-    /// the residual this suite's own <c>ComputedTolerance</c> records for the same deck.
+    /// the residual <c>SlideChartDrawingTests.ComposedTolerance</c> records for the same deck. The
+    /// figure is the 26.8 daily's (2026-10-21); 26.2.4.2's was 131.41.
     /// </remarks>
     [Fact]
     public void AnAccountingValueAxisReservesItsLabelsTrailingBlank()
     {
         DocRect wall = Wall(Slide("slide-chart-accounting-axis.pptx"));
 
-        wall.X.Points.ShouldBe(131.41, Tolerance);
+        wall.X.Points.ShouldBe(133.23, Tolerance);
+    }
+
+    /// <summary>
+    /// Inside the band it reserves, an accounting label's glyphs start half its trailing blank in
+    /// from the left, because the reference centres the label on its visible text.
+    /// </summary>
+    /// <remarks>
+    /// The 26.8 daily (2026-10-21) draws <c>$180.00</c> from x = 89.54 and its wall from 133.23;
+    /// 26.2.4.2 drew them from 86.37 and 131.41. So the label moved 1.36 pt further than the wall,
+    /// which is half the 2.69 pt blank of <c>_)</c> at this size — and the same deck with the
+    /// trailing <c>_)</c> deleted moves its label with the wall exactly, 1.81 pt. Measured in a
+    /// Writer document and a workbook too: +1.37 in both. See <c>ChartLayout.OnVisibleText</c>.
+    /// </remarks>
+    [Fact]
+    public void AnAccountingLabelsGlyphsAreCentredOnItsVisibleText()
+    {
+        LaidOutSlide slide = Slide("slide-chart-accounting-axis.pptx");
+
+        (GlyphRun label, AffineTransform toSlide) = slide.Shapes
+            .Where(shape => shape.Text is not null)
+            .SelectMany(shape => shape.Text!.Runs.Select(placed => (placed.Run, shape.Text.Transform)))
+            .Single(pair => pair.Run.Text.Trim() == "$180.00");
+
+        // The label is " $180.00 " — the accounting format's `_(` is a leading blank too — so the
+        // dollar sign's own pen position is the origin plus the leading blank's advance, one glyph
+        // per character in a Latin run; then onto the slide through the chart text's own matrix.
+        int leading = label.Text.Length - label.Text.TrimStart().Length;
+        double x = label.Origin.X.Emu + label.Glyphs.Take(leading).Sum(glyph => (double)glyph.Advance.Emu);
+        double y = label.Origin.Y.Emu;
+        double dollar = Core.Units.Length.FromEmu(
+            (long)Math.Round((toSlide.A * x) + (toSlide.C * y) + toSlide.E)).Points;
+
+        dollar.ShouldBe(89.54, Tolerance);
     }
 
     /// <summary>
@@ -109,7 +153,8 @@ public class SlideChartTrailingBlankTests
     /// starts where <see cref="SlideChartDrawingTests"/> already asserts — 24.4 pt left of the
     /// accounting one, which is the two formats' whole width difference and not the blank alone.
     /// A change that widened every label by a space would move this one too, and it does not:
-    /// 107.00 before and after, against 26.2.4.2's 106.53.
+    /// 107.00 before and after, against 26.2.4.2's 106.53. Against the 26.8 daily (2026-10-21) it
+    /// is 108.80 against 108.85, the 1.82 pt of the title insets and nothing of the blank.
     /// </remarks>
     [Fact]
     public void TheSameDeckWithoutTheFormatIsUnmoved()
@@ -118,6 +163,6 @@ public class SlideChartTrailingBlankTests
         DocRect accounting = Wall(Slide("slide-chart-accounting-axis.pptx"));
 
         plain.X.Points.ShouldBeLessThan(accounting.X.Points - 20.0);
-        plain.X.Points.ShouldBe(106.53, 2.0);
+        plain.X.Points.ShouldBe(108.85, 0.15);
     }
 }
