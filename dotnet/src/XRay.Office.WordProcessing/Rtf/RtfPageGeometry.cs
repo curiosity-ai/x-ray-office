@@ -259,7 +259,7 @@ internal sealed class RtfPageGeometry
     /// same, brdrw will make a difference" — and <c>\brdrart</c> is an art border, which maps to no
     /// line at all, exactly as an art <c>w:val</c> does.
     /// </remarks>
-    private static int? StyleOf(string name) => name switch
+    internal static int? StyleOf(string name) => name switch
     {
         "brdrs" or "brdrhair" => 1,
         "brdrdb" => 3,

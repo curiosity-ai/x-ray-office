@@ -872,6 +872,7 @@ public sealed partial class RtfDocumentReader
                 // the font and the size where the previous run put them lets a `\f0\fs18` written
                 // for one empty table cell set the face of every cell after it.
                 state.FontIndex = _defaultFontIndex;
+                state.FontStated = false;
                 state.FontSizeHalfPoints = null;
 
                 // The paragraph style sits under the direct formatting rather than beside it, so
@@ -1007,6 +1008,7 @@ public sealed partial class RtfDocumentReader
                 return;
             case "f":
                 state.FontIndex = token.Parameter ?? 0;
+                state.FontStated = state.Destination != RtfDestination.FontTable;
                 if (state.Destination == RtfDestination.FontTable)
                     state.FontTableIndex = token.Parameter ?? 0;
                 return;
@@ -1156,25 +1158,33 @@ public sealed partial class RtfDocumentReader
                 DefinitionTarget(CurrentFlow).PendingBorderSide = 3;
                 return;
 
-            case "brdrw" or "brdrcf" or "brdrnone" or "brdrtbl":
+            case "brdrw" or "brdrcf":
             {
                 TableLevel target = DefinitionTarget(CurrentFlow);
                 if (target.PendingBorderSide is not { } at) return;
 
-                (int Twips, int? ColourIndex, bool IsNone) side = target.PendingCellBorders[at];
+                (int Twips, int? ColourIndex, int Style) side = target.PendingCellBorders[at];
 
-                target.PendingCellBorders[at] = token.Name switch
-                {
+                target.PendingCellBorders[at] = token.Name == "brdrw"
                     // \brdrw is in twips, unlike OOXML's eighths of a point and ODF's CSS shorthand: one
                     // quantity, three units, and reading any of them as another is out by a factor.
-                    "brdrw" => (Math.Max(0, token.Parameter ?? 0), side.ColourIndex, side.IsNone),
-                    "brdrcf" => (side.Twips, token.Parameter, side.IsNone),
+                    ? (Math.Max(0, token.Parameter ?? 0), side.ColourIndex, side.Style)
+                    : (side.Twips, token.Parameter, side.Style);
 
-                    // \brdrnone and \brdrtbl both mean "no border on this side", and both have to beat a
-                    // width stated before them: a producer writes the width and then cancels it.
-                    _ => (0, null, true),
-                };
+                return;
+            }
 
+            // The style words. Without one the side is no border at all, whatever width or colour it was
+            // given: writerfilter only sets `LN_CT_Border_val` from these (`rtfdispatchflag.cxx`:262-330),
+            // and dmapper's cell handler starts from style 0, none (`TDefTableHandler.cxx`:35). \brdrnone,
+            // \brdrnil and \brdrtbl are the style "none", and a later style word overrides them, as a later
+            // `val` does there.
+            case var name when RtfPageGeometry.StyleOf(name) is { } style
+                               && SelectedCellBorder(CurrentFlow) is { } selected:
+            {
+                TableLevel target = DefinitionTarget(CurrentFlow);
+                (int Twips, int? ColourIndex, int Style) side = target.PendingCellBorders[selected];
+                target.PendingCellBorders[selected] = (side.Twips, side.ColourIndex, style);
                 return;
             }
 

@@ -92,6 +92,19 @@ public sealed partial class RtfDocumentReader
         => LevelAt(flow, Math.Max(1, flow.DefinitionLevel));
 
     /// <summary>
+    /// The cell border side a <c>\clbrdr*</c> word selected in the row being defined, or null.
+    /// </summary>
+    /// <remarks>
+    /// Asked without creating the level, unlike <see cref="DefinitionTarget"/>: a <c>\brdrs</c> describes a
+    /// paragraph's border far more often than a cell's, and must not open a table to find out.
+    /// </remarks>
+    private static int? SelectedCellBorder(Flow flow)
+    {
+        int level = Math.Max(1, flow.DefinitionLevel);
+        return flow.Levels.Count >= level ? flow.Levels[level - 1].PendingBorderSide : null;
+    }
+
+    /// <summary>
     /// The <c>\tblpPr</c> the row definition is building, created by the first control word that
     /// needs one.
     /// </summary>
@@ -159,31 +172,42 @@ public sealed partial class RtfDocumentReader
     };
 
     /// <summary>
-    /// A cell's four borders, from the widths and colours its declaration stated.
+    /// A cell's four borders, from the styles, widths and colours its declaration stated.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// <c>\brdrw</c> is in twips, unlike OOXML's eighths of a point and ODF's CSS shorthand — three formats,
-    /// three units for one quantity. A side selected but given no width still means a border: RTF's own default
-    /// is a hairline, which LibreOffice draws at half a point.
+    /// three units for one quantity. writerfilter converts it to eighths of a point on the way in, with the
+    /// one-off that 2 twips is one eighth rather than none (<c>rtfdispatchvalue.cxx</c>:1019-1027), and dmapper
+    /// back to whole twips (<c>TDefTableHandler.cxx</c>:339), so the round trip is reproduced here.
+    /// </para>
+    /// <para>
+    /// A side needs a style word to exist, and a styled side with no width is 0.75 pt, not nothing:
+    /// <see cref="Layout.BorderRules.FromWord"/> substitutes 15 twips for a zero width as
+    /// <c>ConvertBorderWidthFromWord</c> does. Measured on 26.8.1.1's flat export of one-row probes:
+    /// <c>\clbrdrb\brdrs</c> and <c>\clbrdrb\brdrhair</c> are <c>0.75pt solid</c>, <c>\brdrdot</c> is
+    /// <c>0.75pt dotted</c>, <c>\brdrdb</c> is <c>2.25pt double</c>, <c>\brdrs\brdrw10</c> 0.5 pt,
+    /// <c>\brdrs\brdrw40</c> 2 pt, and <c>\brdrw20</c> or <c>\brdrcf1</c> with no style word no border.
+    /// Pandoc writes every table rule as a bare <c>\clbrdrb\brdrs</c>, which this used to drop.
+    /// </para>
     /// </remarks>
     private Layout.CellBorders BordersOf(CellDefinition definition)
     {
-        (int Twips, int? ColourIndex, bool IsNone)[] stated =
-            definition.Borders ?? new (int, int?, bool)[4];
+        (int Twips, int? ColourIndex, int Style)[] stated =
+            definition.Borders ?? new (int, int?, int)[4];
 
         return new Layout.CellBorders(
             Border(stated[0]), Border(stated[1]), Border(stated[2]), Border(stated[3]));
 
-        Layout.TableBorder Border((int Twips, int? ColourIndex, bool IsNone) side)
+        Layout.TableBorder Border((int Twips, int? ColourIndex, int Style) side)
         {
-            if (side.IsNone) return default;
-            if (side.Twips <= 0 && side.ColourIndex is null) return default;
+            if (side.Style == 0) return default;
 
-            Length width = side.Twips > 0
-                ? Length.FromTwips(side.Twips)
-                : Length.FromPoints(0.5);
+            int eighths = side.Twips == 2 ? 1 : side.Twips > 1 ? side.Twips * 2 / 5 : side.Twips;
+            if (Layout.BorderRules.FromWord(side.Style, Length.FromTwips(eighths * 5 / 2)) is not { } rule)
+                return default;
 
-            return new Layout.TableBorder(width, ColourAt(side.ColourIndex) ?? Colour.Black);
+            return new Layout.TableBorder(rule.Width, ColourAt(side.ColourIndex) ?? Colour.Black, rule.Line);
         }
     }
 
@@ -276,7 +300,15 @@ public sealed partial class RtfDocumentReader
         // The cell's last paragraph usually has no \par of its own — the cell mark ends it. The group
         // state is passed because it is the paragraph's own formatting, and without it the paragraph
         // reaches the content tree but never the layout pass: a cell's text would extract and not draw.
-        FinishParagraph(flow, state, force: table.CellContent.Count == 0);
+        //
+        // Forced even when it is empty and the cell already has a paragraph: \cell always ends one, so
+        // `text\par\cell` is two paragraphs, the second empty, carrying whatever formatting is in force
+        // at the cell mark. writerfilter buffers the paragraph properties and a CellEnd for every \cell
+        // (sw/source/writerfilter/rtftok/rtfdispatchsymbol.cxx:247-291), and dmapper finishes the
+        // paragraph it ends. Pandoc writes every cell as `{\pard\intbl ...\par}\cell`, so dropping the
+        // empty one made each of its rows one line short — rtf/table_error_codes.rtf was one page
+        // against LibreOffice's two.
+        FinishParagraph(flow, state, force: true);
         CollectCell(table);
     }
 
