@@ -18,42 +18,35 @@ namespace XRay.Office.Presentations.Tests;
 /// clustered column chart and LibreOffice's two conversions of it — holding two series of four
 /// values each over the categories Q1 to Q4, with a title, both axis titles and a legend on the
 /// right. LibreOffice's PDF for it draws, in this order: a white chart-area rectangle, a grey
-/// wall from 106.526 to 607.493 pt across and 116.815 to 358.809 up, five category ticks, ten
-/// value ticks labelled 0 to 180, the two axis lines, eight bars each followed by its own
-/// outline, and the labels.
+/// wall, five category ticks, ten value ticks labelled 0 to 180, the two axis lines, eight bars
+/// each followed by its own outline, and the labels. The 26.8 daily (2026-10-21) draws the wall
+/// from 108.85 to 606.78 pt across and 118.54 to 359.38 up.
 /// </para>
 /// <para>
-/// <strong>The expectations differ by family and the difference is the finding.</strong> An ODF
-/// chart states its inner plot rectangle in <c>chart:coordinate-region</c>, so the ODP assertions
-/// are exact — every bar within 0.06 pt of the reference. An OOXML chart states nothing unless
-/// the author dragged the plot area, so the PPTX goes through the composition heuristic and its
-/// tolerance is 2 pt on a 623 pt frame. Both draw the same bars in the same proportions, because
-/// the arithmetic <em>inside</em> the plot area is shared and is exact in both.
+/// <strong>Both families are now composed, and that is the finding of the retarget.</strong> The
+/// ODP states its inner plot rectangle in <c>chart:coordinate-region</c>, and these tests used to
+/// assert that rectangle exactly — which agreed with 26.2.4.2 only because the file was written
+/// with 26.2's own automatic layout. Its plot area's style says <c>chart:auto-position</c> and
+/// <c>chart:auto-size</c>, under which LibreOffice ignores the stated rectangle
+/// (<c>OdfChartPlot.Region</c>), and the daily's automatic layout puts the wall 2.3 pt right of
+/// it. So the ODP goes through the same composition as the PPTX, and both land within a tenth of
+/// a point of the daily since the title insets were retargeted (<c>ChartLayout.TitleInsetEm</c>).
 /// </para>
 /// </remarks>
 public class SlideChartDrawingTests
 {
     /// <summary>
-    /// A twentieth of a point, for anything an ODF chart states outright.
+    /// A tenth and a half of a point, for the plot rectangle the composition computes on this deck.
     /// </summary>
     /// <remarks>
-    /// <c>chart:coordinate-region</c> is written to three decimal places of a centimetre, so a
-    /// stated 2.258 cm is 0.03 mm — 0.09 pt — of quantisation before anything is computed. This
-    /// is loose enough to absorb that and nothing else.
+    /// It was two points against 26.2.4.2, which the composition missed by 1.29 pt left, 0.75
+    /// below, 0.50 narrower and 0.76 taller. Measured on 2026-10-21 against the 26.8 daily, once
+    /// a title's insets are sized by the model's 12 pt default (<c>ChartLayout.TitleInsetEm</c>):
+    /// the composed wall is within 0.07 pt of the daily's on every edge and every bar within 0.05
+    /// across and 0.08 in height, for the <c>.odp</c> and the <c>.pptx</c> alike. Most of the old
+    /// residual was that rule under another reference's figures.
     /// </remarks>
-    private const double StatedTolerance = 0.1;
-
-    /// <summary>
-    /// Two points, for a plot rectangle the composition heuristic had to compute.
-    /// </summary>
-    /// <remarks>
-    /// The residual after the port: measured on <c>chart-bar-deck.pptx</c> against LibreOffice's
-    /// own PDF, the plot area comes out 1.29 pt left of, 0.75 pt below, 0.50 pt narrower and
-    /// 0.76 pt taller than the reference's. That is 0.2% of the frame's width, and it is
-    /// LibreOffice's second layout pass — the one that re-lays the diagram out around the labels
-    /// it has just measured — which this does not do.
-    /// </remarks>
-    private const double ComputedTolerance = 2.0;
+    private const double ComposedTolerance = 0.15;
 
     private static LaidOutSlide Slide(string name)
     {
@@ -92,12 +85,13 @@ public class SlideChartDrawingTests
     }
 
     [Fact]
-    public void AnOdfChartsPlotAreaIsTheRectangleTheFileStates()
+    public void AnAutomaticOdfChartsPlotAreaIsComposedAndNotTheRectangleTheFileStates()
     {
-        // chart-bar-deck.odp states chart:coordinate-region svg:x="2.258cm" svg:y="1.594cm"
-        // svg:width="17.674cm" svg:height="8.538cm", and LibreOffice's own PDF draws the wall at
-        // 2258, 1594, 17672, 8537 in hundredths of a millimetre — the same rectangle to within
-        // the rounding of a centimetre-formatted attribute. So no heuristic is involved.
+        // chart-bar-deck.odp states chart:coordinate-region svg:x="2.258cm" — 64.01 pt into the
+        // chart — under a plot-area style saying chart:auto-position="true", so LibreOffice lays
+        // it out itself. The 26.8 daily (2026-10-21) draws the wall at 108.85 to 606.78 pt
+        // across and 240.84 tall, 2.3 pt right of the stated rectangle; with both flags rewritten
+        // false it draws the stated one. See OdfChartPlot.Region.
         LaidOutSlide slide = Slide("chart-bar-deck.odp");
 
         DocRect wall = slide.Shapes
@@ -105,23 +99,22 @@ public class SlideChartDrawingTests
             .Select(Bounds)
             .Single();
 
-        // In PDF's own coordinates the reference draws 106.526 to 607.493 across; the slide's
-        // origin is its top-left, so the vertical numbers are the page height less those.
-        wall.X.Points.ShouldBe(106.526, StatedTolerance);
-        wall.Right.Points.ShouldBe(607.493, StatedTolerance);
-        wall.Width.Points.ShouldBe(500.967, StatedTolerance);
-        wall.Height.Points.ShouldBe(241.994, StatedTolerance);
+        wall.X.Points.ShouldBe(108.85, ComposedTolerance);
+        wall.Right.Points.ShouldBe(606.78, ComposedTolerance);
+        wall.Width.Points.ShouldBe(497.93, ComposedTolerance);
+        wall.Height.Points.ShouldBe(240.84, ComposedTolerance);
     }
 
     [Fact]
     public void AnOdfChartsBarsLandWhereLibreOfficeDrawsThem()
     {
-        // Every bar of chart-bar-deck.odp, quoted from LibreOffice's PDF: the four of the first
-        // series then the four of the second, each 41.75 pt wide, all rising from 116.84.
+        // Every bar of chart-bar-deck.odp, quoted from the 26.8 daily's PDF (2026-10-21): the
+        // four of the first series then the four of the second, each 41.50 pt wide, all rising
+        // from 118.57.
         (double Left, double Height)[] reference =
         [
-            (127.39, 161.32), (252.62, 127.73), (377.86, 192.25), (503.09, 225.86),
-            (169.14, 118.32), (294.38, 177.48), (419.61, 135.78), (544.85, 162.68),
+            (129.57, 160.56), (254.07, 127.11), (378.54, 191.34), (503.04, 224.79),
+            (171.07, 117.75), (295.57, 176.63), (420.04, 135.16), (544.53, 161.92),
         ];
 
         List<DocRect> bars = Bars(Slide("chart-bar-deck.odp"));
@@ -129,36 +122,37 @@ public class SlideChartDrawingTests
 
         for (int at = 0; at < reference.Length; at++)
         {
-            bars[at].X.Points.ShouldBe(reference[at].Left, StatedTolerance);
-            bars[at].Width.Points.ShouldBe(41.75, StatedTolerance);
-            bars[at].Height.Points.ShouldBe(reference[at].Height, StatedTolerance);
+            bars[at].X.Points.ShouldBe(reference[at].Left, ComposedTolerance);
+            bars[at].Width.Points.ShouldBe(41.50, ComposedTolerance);
+            bars[at].Height.Points.ShouldBe(reference[at].Height, ComposedTolerance);
         }
     }
 
     [Fact]
     public void ABarsWidthIsItsSlotDividedByTheSeriesCountPlusTheGap()
     {
-        // A category slot is the plot area's width over four categories, 125.242 pt, and two
-        // clustered series with c:gapWidth val="100" divide it into three —
-        // CategoryPositionHelper::getScaledSlotWidth with setOuterDistance(1.0). The first bar
-        // starts half a gap into the slot. Both come straight out of the reference's numbers:
-        // 41.75 wide, starting 20.86 into a slot that starts at 106.526.
+        // A category slot is the plot area's width over four categories, 124.48 pt on the daily's
+        // 497.93 pt wall, and two clustered series with c:gapWidth val="100" divide it into
+        // three — CategoryPositionHelper::getScaledSlotWidth with setOuterDistance(1.0). The first
+        // bar starts half a gap into the slot. Both come straight out of the daily's numbers
+        // (2026-10-21): 41.50 wide, starting 20.72 into a slot that starts at 108.85.
         List<DocRect> bars = Bars(Slide("chart-bar-deck.odp"));
 
-        bars[0].Width.Points.ShouldBe(125.242 / 3.0, StatedTolerance);
-        (bars[0].X.Points - 106.526).ShouldBe(125.242 / 3.0 / 2.0, StatedTolerance);
+        bars[0].Width.Points.ShouldBe(124.4825 / 3.0, ComposedTolerance);
+        (bars[0].X.Points - 108.85).ShouldBe(124.4825 / 3.0 / 2.0, ComposedTolerance);
 
         // And the second series' first bar butts straight onto the first's, because c:overlap
         // is zero: no gap within a category, one bar's width of gap between categories.
-        bars[4].X.Points.ShouldBe(bars[0].X.Points + bars[0].Width.Points, StatedTolerance);
+        bars[4].X.Points.ShouldBe(bars[0].X.Points + bars[0].Width.Points, ComposedTolerance);
     }
 
     [Fact]
     public void ABarsHeightIsItsValueOverTheAxisRange()
     {
         // The check that catches a wrong axis scale, which is the failure that looks reasonable.
-        // The plot is 241.994 pt for 180 units, so 120 is 161.33 pt and 168 is 225.86 — and an
-        // axis that ran to 200 instead would draw them at 145.2 and 203.3.
+        // The plot is 240.84 pt for 180 units on the 26.8 daily (2026-10-21; 241.994 on
+        // 26.2.4.2), so 120 is 160.56 pt and 168 is 224.78 — and an axis that ran to 200 instead
+        // would draw them at 144.5 and 202.3.
         List<DocRect> bars = Bars(Slide("chart-bar-deck.odp"));
 
         double perUnit = bars[3].Height.Points / 168.0;
@@ -166,23 +160,24 @@ public class SlideChartDrawingTests
         bars[1].Height.Points.ShouldBe(95 * perUnit, 0.02);
         bars[2].Height.Points.ShouldBe(143 * perUnit, 0.02);
 
-        (241.994 / 180.0).ShouldBe(perUnit, 0.01);
+        (240.84 / 180.0).ShouldBe(perUnit, 0.01);
     }
 
     [Fact]
-    public void AnOoxmlChartIsComposedAndLandsWithinTwoPointsOfTheReference()
+    public void AnOoxmlChartIsComposedAndLandsWithinATenthOfAPointOfTheReference()
     {
         // The same chart as .pptx, whose c:plotArea has no c:layout at all — so this is the
         // composition heuristic's output rather than the file's. The residual is recorded on
-        // ComputedTolerance and is entirely in the plot rectangle: the bars inside it are in the
+        // ComposedTolerance and is entirely in the plot rectangle: the bars inside it are in the
         // same proportions as the ODF pair's, to a fortieth of a point.
         List<DocRect> bars = Bars(Slide("chart-bar-deck.pptx"));
         bars.Count.ShouldBe(8);
 
-        bars[0].X.Points.ShouldBe(127.39, ComputedTolerance);
-        bars[0].Width.Points.ShouldBe(41.75, ComputedTolerance);
-        bars[0].Height.Points.ShouldBe(161.32, ComputedTolerance);
-        bars[3].Height.Points.ShouldBe(225.86, ComputedTolerance);
+        // The daily's figures (2026-10-21), which this now meets to a tenth of a point.
+        bars[0].X.Points.ShouldBe(129.57, ComposedTolerance);
+        bars[0].Width.Points.ShouldBe(41.50, ComposedTolerance);
+        bars[0].Height.Points.ShouldBe(160.52, ComposedTolerance);
+        bars[3].Height.Points.ShouldBe(224.76, ComposedTolerance);
 
         double perUnit = bars[3].Height.Points / 168.0;
         bars[0].Height.Points.ShouldBe(120 * perUnit, 0.025);

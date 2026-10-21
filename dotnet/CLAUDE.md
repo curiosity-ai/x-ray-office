@@ -713,12 +713,19 @@ against 26.8.1.1 holds. 26.2.4.2 and the daily agree on 493; of the rest, three 
 two are taken — a wrapped centred Calc line is centred without its trailing blanks (tdf#168135,
 `SheetTextLayout.AlignedWidth`), a notched `stealth` arrowhead stops its shaft at the notch
 (`a0c13790095`, `LineEnds`), and 26.8 writes one PDF font object per face *and size*, which only an
-instrument reading resource names notices. **Not taken: every chart's plot area sits about 1.82 pt
-further right and down in 26.8** (ten `chart-bar-*`/`chart-face-*` fixtures, e.g. the wall of
-`slide-chart-accounting-axis.pptx` at 133.23 × 118.63 against 26.2.4.2's 131.41 × 116.81, right
-edge unmoved), and the commit is not in `lo-upstream`'s history since 2026-04-01, so it predates it.
-Unit tests that pin 26.2.4.2 chart geometry, such as `SlideChartTrailingBlankTests`, still pin the
-old figure.
+instrument reading resource names notices. **Every chart's plot area sits about 1.82 pt further
+right and down in 26.8, and that is now taken** (`ChartLayout.TitleInsetEm`): the 26.8 branch's
+`ShapeFactory::createText` appends a title's character properties to its text portion instead of
+setting them on the shape (`appendTextPortion`), so the "#i109336#" insets it reads back off the
+shape are sized by the chart model's 12 pt pool default (`DrawModelWrapper.cxx:52`) and not by the
+title — `round(423 × 0.30)` = 127 hundredths a side at every size. A 9 pt axis title's shape grows
+by 64 hundredths (1.81 pt) and a 13 pt main title's shrinks by 22, which is the whole shift, right
+edge unmoved because no title borders it. Two neighbours fell out of the same fixtures and are taken
+with it: a centred chart label ending in blanks has its glyphs centred without them
+(`ChartLayout.OnVisibleText`, tdf#168135's EditEngine rule again — half an accounting `_)`, 1.36 pt,
+in all three hosts), and an ODF plot area whose style says `chart:auto-position` or `chart:auto-size`
+has its stated `chart:coordinate-region` ignored (`OdfChartPlot.Region`), which 26.2.4.2's agreement
+with its own written rectangle had hidden. `probes/chartshift-r1/results.md` has the measurements.
 
 ### Look at the rendering. Do not chase it through metrics alone.
 

@@ -73,6 +73,12 @@ public enum ChartLabelAnchor
 /// and the pass leaves it alone.
 /// </para>
 /// </param>
+/// <param name="IsLeftAligned">
+/// Whether the reference sets the label's paragraph flush left rather than centred: a legend
+/// entry's name and a data table's series name, and nothing else. Every other piece of chart text
+/// is a centred paragraph, which is what <see cref="ChartLayout"/>'s trailing-blank pass needs to
+/// know — see <c>OnVisibleText</c>.
+/// </param>
 /// <remarks>
 /// <strong><paramref name="Stretch"/> exists because a glyph run carries one em and a
 /// non-square stretch has two.</strong> An embedded chart is composed at its own size and scaled
@@ -92,7 +98,8 @@ public readonly record struct ChartLabel(
     double Rotation = 0.0,
     double Stretch = 1.0,
     string? Family = null,
-    bool? IsBold = null);
+    bool? IsBold = null,
+    bool IsLeftAligned = false);
 
 /// <summary>One filled rectangle — a bar, a legend key, the plot area's wall.</summary>
 /// <param name="Bounds">Where it goes.</param>
@@ -489,6 +496,62 @@ public static partial class ChartLayout
     }
 
     /// <summary>
+    /// The em the reference sizes a <em>title's</em> insets by, which is not the title's own: the
+    /// chart model's default character height, 12 pt.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <strong>Changed in 26.8.</strong> The overload of <c>ShapeFactory::createText</c> that
+    /// <c>VTitle::createShapes</c> calls reads the font height it sizes the "#i109336#" insets by
+    /// back off the <em>shape</em> — <c>xShape-&gt;SvxShape::getPropertyValue("CharHeight")</c>
+    /// (<c>chart2/source/view/main/ShapeFactory.cxx:2279-2299</c> on the 26.8 branch). 26.2 put
+    /// each formatted string's character properties on the whole shape before it got there, so the
+    /// shape's height was the title's; the 26.8 branch appends them to the text portion instead
+    /// (<c>appendTextPortion</c>, <c>:2220-2268</c>), so the shape keeps the model's pool default,
+    /// <c>SetDefaultFontHeight(423)</c> — "12pt" (<c>DrawModelWrapper.cxx:52</c>). Every title is
+    /// now inset by <c>round(423 × 0.18) = 76</c> across and <c>round(423 × 0.30) = 127</c> down,
+    /// whatever its size.
+    /// </para>
+    /// <para>
+    /// Measured on <c>slide-chart-accounting-axis.pptx</c> (13 pt title, 9 pt axis titles) through
+    /// the reference's own <c>chart:coordinate-region</c>, 26.2.4.2 against the 26.8 daily
+    /// (2026-10-21): the plot area's left edge moves 3.136 → 3.200 cm and its bottom 10.132 →
+    /// 10.068 — each by <c>2 × (127 − 95)</c> = 64 hundredths, the rotated value title's width and
+    /// the category title's height growing from a 9 pt inset to a 12 pt one — and its top
+    /// 1.594 → 1.572, by <c>2 × (127 − 138)</c>, the 13 pt title's shrinking. The right edge,
+    /// which no title borders, does not move. 26.8.1.1 agrees with the daily.
+    /// </para>
+    /// <para>
+    /// Only titles: axis labels and data labels go through the <c>OUString</c> and
+    /// <c>XFormattedString</c> overloads, which set no insets at all, and the legend's own
+    /// insets come from its entries' properties. A title whose <c>ReferencePageSize</c> is set
+    /// would be rescaled from that default too, but no import filter sets it.
+    /// </para>
+    /// </remarks>
+    private static readonly Length TitleInsetEm = Length.FromMm100(423);
+
+    /// <summary>A title shape's horizontal inset, each side: <c>round(423 × 0.18)</c>.</summary>
+    /// <remarks>See <see cref="TitleInsetEm"/>.</remarks>
+    private static readonly Length TitleInsetX =
+        Length.FromMm100((long)Math.Round(TitleInsetEm.Mm100 * TextShapeInsetX, MidpointRounding.AwayFromZero));
+
+    /// <summary>A title shape's vertical inset, each side: <c>round(423 × 0.30)</c>.</summary>
+    /// <remarks>See <see cref="TitleInsetEm"/>.</remarks>
+    private static readonly Length TitleInsetY =
+        Length.FromMm100((long)Math.Round(TitleInsetEm.Mm100 * TextShapeInsetY, MidpointRounding.AwayFromZero));
+
+    /// <summary>
+    /// The size of the shape a title is drawn in: its text and the 12 pt insets of
+    /// <see cref="TitleInsetEm"/>.
+    /// </summary>
+    private static DocSize TitleShape(
+        ChartText measurer, string text, Length size, bool bold = false, Length maxWidth = default)
+    {
+        DocSize measured = MeasureLines(measurer, text, size, bold, maxWidth);
+        return new DocSize(measured.Width + TitleInsetX * 2, measured.Height + TitleInsetY * 2);
+    }
+
+    /// <summary>
     /// The share of the chart's own width a main title's text is allowed before it wraps.
     /// </summary>
     /// <remarks>
@@ -628,8 +691,76 @@ public static partial class ChartLayout
         DocRect drawn = DrawnExtent(composed, own, text, plot.IsLabelBold);
 
         return InWeight(
-            InFamily(Stretch(composed, drawn, frame), plot.TextFamily),
+            InFamily(Stretch(OnVisibleText(composed, text, plot.IsLabelBold), drawn, frame), plot.TextFamily),
             plot.IsLabelBold);
+    }
+
+    /// <summary>
+    /// Moves every centred label that ends in blanks right by half of them, so that its glyphs are
+    /// centred on its visible text inside a box that still has the blanks' width.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <strong>Changed in 26.8.</strong> A chart label is an EditEngine text shape autogrown around
+    /// its paragraph whole, so its trailing blanks are part of its width (see
+    /// <c>SlideChart.Measurer</c>) and the band an axis reserves for it is unchanged. What moved is
+    /// where the glyphs go inside that box: the paragraph is centred (<c>ParaAdjust</c> CENTER,
+    /// <c>PropertyMapper::getTextLabelMultiPropertyLists</c>,
+    /// <c>chart2/source/view/main/PropertyMapper.cxx:546</c>, and the title overload of
+    /// <c>ShapeFactory::createText</c>), and the 26.8 branch centres a line on its width less its
+    /// trailing U+0020 (tdf#168135, <c>ImpEditEngine::CreateLines</c>,
+    /// <c>editeng/source/editeng/impedit3.cxx:1646-1682</c>, the same commit
+    /// <c>SheetTextLayout.AlignedWidth</c> ports for a Calc cell). With the box exactly as wide as
+    /// the line, <c>(nMaxLineWidth - nCenterWidth) / 2</c> is half the blanks, so 26.2.4.2 drew the
+    /// glyphs at the box's left edge and the daily draws them half the blanks further on.
+    /// </para>
+    /// <para>
+    /// Measured against the 26.8 daily (2026-10-21) on one-attribute variants of the three
+    /// <c>chart-bar-*</c> fixtures, each value or category label's move from 26.2.4.2 less the
+    /// plot area's own: an accounting value axis, whose every tick ends in the blank of
+    /// <c>_)</c>, <b>+1.36 to +1.37 pt</b> in the deck, the Writer document and the workbook alike,
+    /// against a predicted 1.355; a category written <c>"Q1   "</c>, <b>+4.08 pt</b> in the Writer
+    /// document and the workbook, against three blanks' 4.07. The same deck without the format
+    /// does not move. A legend entry is left-aligned (<c>VLegend.cxx:118</c> and the shape's
+    /// default adjustment) and a data table's series name is set
+    /// <c>ParagraphAdjust_LEFT</c> (<c>DataTableView.cxx:412-413</c>), so neither is moved; they
+    /// carry <see cref="ChartLabel.IsLeftAligned"/>.
+    /// </para>
+    /// <para>
+    /// Done after <see cref="DrawnExtent"/> is taken, because what fits the chart onto its frame
+    /// is the shapes' extent and the shapes do not move — and before <see cref="Stretch"/>, so the
+    /// shift is scaled with everything else in the composition.
+    /// </para>
+    /// </remarks>
+    private static ChartDrawing OnVisibleText(ChartDrawing drawing, ChartText measurer, bool labelBold)
+    {
+        List<ChartLabel>? labels = null;
+
+        for (int index = 0; index < drawing.Labels.Count; index++)
+        {
+            ChartLabel label = drawing.Labels[index];
+            if (label.IsLeftAligned || label.Text.Length == 0 || label.Text[^1] != ' ') continue;
+
+            string visible = label.Text.TrimEnd(' ');
+            if (visible.Length == 0) continue;
+
+            ChartText face = measurer.For(label.Family);
+            bool bold = label.IsBold ?? labelBold;
+            Length blanks = face.Measure(label.Text, label.Size, bold).Width
+                            - face.Measure(visible, label.Size, bold).Width;
+            if (blanks <= Length.Zero) continue;
+
+            // Along the label's own baseline, which a quarter-turned title runs up the page.
+            Length half = blanks / 2;
+            DocPoint at = new(
+                label.At.X + half * Math.Cos(label.Rotation),
+                label.At.Y - half * Math.Sin(label.Rotation));
+
+            labels ??= [.. drawing.Labels];
+            labels[index] = label with { At = at };
+        }
+
+        return labels is null ? drawing : drawing with { Labels = labels };
     }
 
     /// <summary>Stamps the chart's label weight onto every label that did not state one.</summary>
@@ -2298,7 +2429,7 @@ public static partial class ChartLayout
         // pie's margin twice puts a titled pie 8 pt low on a 12 cm chart.
         if (plot.Title is { Length: > 0 } title)
         {
-            top += Shape(measurer.For(plot.TitleFamily), title, plot.TitleSize, plot.IsTitleBold,
+            top += TitleShape(measurer.For(plot.TitleFamily), title, plot.TitleSize, plot.IsTitleBold,
                          frame.Width * TitleWidthFraction).Height
                    + (frame.Height * PageMargin) + TitleGap;
         }
@@ -2330,14 +2461,14 @@ public static partial class ChartLayout
             string? below = columns ? plot.CategoryAxisTitle : plot.ValueAxisTitle;
 
             if (below is { Length: > 0 } under)
-                bottom -= Shape(measurer, under, plot.AxisTitleSize, plot.IsAxisTitleBold).Height
+                bottom -= TitleShape(measurer, under, plot.AxisTitleSize, plot.IsAxisTitleBold).Height
                           + CategoryTitleGap;
             if (beside is { Length: > 0 } side)
-                left += Shape(measurer, side, plot.AxisTitleSize, plot.IsAxisTitleBold).Height
+                left += TitleShape(measurer, side, plot.AxisTitleSize, plot.IsAxisTitleBold).Height
                         + ValueTitleGap;
 
             if (plot.SecondaryValueAxisTitle is { Length: > 0 } second && plot.SecondaryAxisVisible)
-                right -= Shape(measurer, second, plot.AxisTitleSize, plot.IsAxisTitleBold).Height
+                right -= TitleShape(measurer, second, plot.AxisTitleSize, plot.IsAxisTitleBold).Height
                          + ValueTitleGap;
         }
 
@@ -3624,7 +3755,8 @@ public static partial class ChartLayout
                     new DocPoint(left + indent, middle),
                     ChartLabelAnchor.LeftMiddle,
                     plot.LabelSize,
-                    plot.LabelColour));
+                    plot.LabelColour,
+                    IsLeftAligned: true));
             }
 
             for (int at = 0; at < categories; at++)
@@ -5061,10 +5193,13 @@ public static partial class ChartLayout
             // measured terms takes 9.57 pt of error down to 0.36 on the four corpus pies that
             // carry an 18 pt title, and a constant fitted to close the rest would be a fit rather
             // than a law.
+            //
+            // <strong>Those figures are 26.2.4.2's and the slope is gone in 26.8:</strong> the
+            // inset is now sized by the model's 12 pt default rather than by the title, so it is
+            // the flat `round(423 * 0.30)` = 127 at every size (<see cref="TitleInsetEm"/>). A
+            // 13 pt title's text sits 0.31 pt higher in the daily than in 26.2.4.2, as predicted.
             Length pen = frame.Y + (frame.Height * PageMargin) + TitleGap
-                         + Length.FromMm100((long)Math.Round(
-                               plot.TitleSize.Mm100 * TextShapeInsetY,
-                               MidpointRounding.AwayFromZero));
+                         + TitleInsetY;
             foreach (string line in LinesOf(
                          titles, title, plot.TitleSize, plot.IsTitleBold,
                          frame.Width * TitleWidthFraction))
@@ -5120,7 +5255,7 @@ public static partial class ChartLayout
             // which is exactly where we drew it — and this rectangle's centre is **352.80**.
             // The vertical term is 6.50 pt measured against `frame.Height × 0.02` = 6.62.
             Length height =
-                Shape(measurer, under, plot.AxisTitleSize, plot.IsAxisTitleBold).Height;
+                TitleShape(measurer, under, plot.AxisTitleSize, plot.IsAxisTitleBold).Height;
             labels.Add(new ChartLabel(
                 under,
                 new DocPoint(
@@ -5145,7 +5280,7 @@ public static partial class ChartLayout
         // the value title came out 4.1 pt high and 3.9 pt left of 26.8.1.1's. The rotated
         // title's width is its shape's height, insets included, as `getFinalSize` reports it.
         Length besideWidth(string text) =>
-            Shape(measurer, text, plot.AxisTitleSize, plot.IsAxisTitleBold).Height;
+            TitleShape(measurer, text, plot.AxisTitleSize, plot.IsAxisTitleBold).Height;
         Length sideCentreY = diagram.Y + diagram.Height / 2;
 
         if (beside is { Length: > 0 } side)
@@ -5341,7 +5476,8 @@ public static partial class ChartLayout
                     plot.LegendFont,
                     plot.LegendColour,
                     Family: plot.LegendFamily,
-                    IsBold: plot.LegendBold));
+                    IsBold: plot.LegendBold,
+                    IsLeftAligned: true));
 
                 Length text =
                     MeasureLines(legendText, name, plot.LegendFont, plot.LegendBold).Width;
@@ -5680,7 +5816,7 @@ public static partial class ChartLayout
 
         if (plot.Title is { Length: > 0 } title)
         {
-            top += Shape(measurer.For(plot.TitleFamily), title, plot.TitleSize, plot.IsTitleBold,
+            top += TitleShape(measurer.For(plot.TitleFamily), title, plot.TitleSize, plot.IsTitleBold,
                          frame.Width * TitleWidthFraction).Height
                    + (frame.Height * PageMargin) + TitleGap;
         }
