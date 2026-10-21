@@ -68,6 +68,12 @@ public sealed partial class DocxLayoutSource
     /// <summary>The document's automatic hyphenation, or null when <c>w:autoHyphenation</c> is off.</summary>
     private readonly HyphenationRules? _hyphenation;
 
+    /// <summary>
+    /// The hyphenation a paragraph stating <c>w:suppressAutoHyphens w:val="0"</c> takes when the document's
+    /// is off; see <see cref="Hyphenation(XElement?, bool)"/>.
+    /// </summary>
+    private readonly HyphenationRules _statedHyphenation;
+
     /// <summary>What <c>w:beforeAutospacing</c> and <c>w:afterAutospacing</c> stand for here.</summary>
     private readonly Length _autoSpacing;
 
@@ -158,6 +164,7 @@ public sealed partial class DocxLayoutSource
         _defaultTabInterval = TabInterval(settings);
         _compatibilityMode = CompatibilityMode(settings);
         _hyphenation = Hyphenation(settings);
+        _statedHyphenation = Hyphenation(settings, documentWide: false)!;
         WordCompatibility compatibility = WordCompatibility.Read(settings);
         _autoSpacing = AutoSpacing(settings, compatibility);
         _underlinesTrailingSpace = compatibility.UnderlinesTrailingSpace;
@@ -1186,7 +1193,7 @@ public sealed partial class DocxLayoutSource
         ParagraphFormat format =
             WordParagraphFormats.Resolve(
                 _styles, properties, _defaultTabInterval, _autoSpacing, _tableStyle,
-                _compatibilityMode >= 15, _hyphenation);
+                _compatibilityMode >= 15, _hyphenation, _statedHyphenation);
 
         // After the walk, because reading a note body or a text box re-enters this method and a list
         // counter advanced from inside a nested flow would number the paragraph after it wrongly.
@@ -3380,10 +3387,20 @@ public sealed partial class DocxLayoutSource
     /// A paragraph takes it unless its <c>w:suppressAutoHyphens</c> says otherwise — see
     /// <see cref="WordParagraphFormats.Resolve"/>.
     /// </para>
+    /// <para>
+    /// With <paramref name="documentWide"/> false this answers for a paragraph that turns hyphenation on
+    /// itself, by a <c>w:suppressAutoHyphens w:val="0"</c> in a document that does not: dmapper maps the
+    /// element to <c>ParaIsHyphenation = !value</c> whatever the settings say, and measured on 26.8's daily
+    /// such a paragraph is hyphenated. The zone, the limit and the keep reach Standard only past
+    /// <c>if (!(m_bAutoHyphenation || m_bNoHyphenateCaps || m_bWidowControl)) return;</c> (:751-752), so
+    /// without <c>w:doNotHyphenateCaps</c> it takes the pool's rules.
+    /// </para>
     /// </remarks>
-    private static HyphenationRules? Hyphenation(XElement? settings)
+    private static HyphenationRules? Hyphenation(XElement? settings, bool documentWide = true)
     {
-        if (!Word.IsOn(Word.Child(settings, "autoHyphenation"))) return null;
+        bool automatic = Word.IsOn(Word.Child(settings, "autoHyphenation"));
+        if (documentWide && !automatic) return null;
+        if (!automatic && !Word.IsOn(Word.Child(settings, "doNotHyphenateCaps"))) return HyphenationRules.Default;
 
         int zone = int.TryParse(
             Word.Attribute(Word.Child(settings, "hyphenationZone"), "val"),

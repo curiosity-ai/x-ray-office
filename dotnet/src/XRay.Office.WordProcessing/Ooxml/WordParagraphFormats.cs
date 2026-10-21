@@ -296,6 +296,11 @@ internal static class WordParagraphFormats
     /// <c>w:suppressAutoHyphens</c> is on, directly or through its style, is not hyphenated: dmapper maps the
     /// element to <c>ParaIsHyphenation = !value</c> (<c>DomainMapper.cxx</c>:2024-2025).
     /// </param>
+    /// <param name="statedHyphenation">
+    /// What a paragraph whose <c>w:suppressAutoHyphens</c> is stated off takes when
+    /// <paramref name="hyphenation"/> is null — the same mapping turns hyphenation <em>on</em> for it — or null
+    /// to leave such a paragraph unhyphenated.
+    /// </param>
     internal static ParagraphFormat Resolve(
         WordStyles styles,
         XElement? paragraphProperties,
@@ -303,7 +308,8 @@ internal static class WordParagraphFormats
         Length? autoSpacing = null,
         IReadOnlyList<XElement>? tableStyle = null,
         bool shrinksJustifiedBlanks = false,
-        HyphenationRules? hyphenation = null)
+        HyphenationRules? hyphenation = null,
+        HyphenationRules? statedHyphenation = null)
     {
         ArgumentNullException.ThrowIfNull(styles);
 
@@ -400,10 +406,9 @@ internal static class WordParagraphFormats
 
             ShrinksJustifiedBlanks = shrinksJustifiedBlanks,
 
-            Hyphenation = hyphenation is not null
-                          && !IsOn(styles, paragraphProperties, styleId, "suppressAutoHyphens", tableStyle)
-                ? hyphenation
-                : null,
+            Hyphenation = Layer(styles, paragraphProperties, styleId, "suppressAutoHyphens", tableStyle) is { } suppress
+                ? Word.IsOn(suppress) ? null : hyphenation ?? statedHyphenation
+                : hyphenation,
         };
     }
 

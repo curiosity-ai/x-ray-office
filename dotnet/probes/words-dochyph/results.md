@@ -19,3 +19,11 @@ of the page is the reference's.
 So `fAutoHyphen` decides only where no style states `sprmPFNoAutoHyph`, and `dxaHotZ`, `cConsecHypLim` and
 `fHyphCapitals` are not read, as `ww8par2.cxx`:4557-4571 and `ww8par6.cxx`:5378-5398 say. Eleven of eleven
 variants are line-identical after the change.
+
+## DOCX: `w:suppressAutoHyphens w:val="0"` without `w:autoHyphenation`
+
+`gen-docx-stated.py`: the reference hyphenates the paragraph (2 lines end in a hyphen); the base tree drew
+none, this branch draws the same lines as the reference. dmapper maps the element to
+`ParaIsHyphenation = !value` whatever the settings say. Corpus: `docx/issue_359_list_whitespace.docx`
+states it six times under `w:autoHyphenation w:val="0"`, but none of its lines is long enough to break,
+so it renders identically.
