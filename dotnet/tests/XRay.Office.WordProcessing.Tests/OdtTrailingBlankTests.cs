@@ -35,7 +35,10 @@ public sealed class OdtTrailingBlankTests
         XNamespace config = "urn:oasis:names:tc:opendocument:xmlns:config:1.0";
         XNamespace office = "urn:oasis:names:tc:opendocument:xmlns:office:1.0";
 
-        XElement set = new(config + "config-item-set", new XAttribute(config + "name", "ooo:configuration-settings"));
+        XElement set = new(
+            config + "config-item-set",
+            new XAttribute(XNamespace.Xmlns + "ooo", "http://openoffice.org/2004/office"),
+            new XAttribute(config + "name", "ooo:configuration-settings"));
         foreach ((string name, string? value) in items)
         {
             if (value is null) continue;
