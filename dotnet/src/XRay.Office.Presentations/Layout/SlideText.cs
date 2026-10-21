@@ -578,6 +578,10 @@ public readonly record struct SlideEscapement(int Percent, int Proportion)
 /// break and is drawn from the face's own <c>post</c> metrics after the text is placed.
 /// </param>
 /// <param name="IsStruckThrough">Whether a rule is drawn through it.</param>
+/// <param name="UnderlineColour">
+/// The colour the underline is drawn in when it is not the text's — DrawingML's
+/// <c>a:uFill</c> — or null for the text's own colour.
+/// </param>
 /// <param name="IsShadowed">
 /// Whether the characters cast the legacy per-character drop shadow — bit 4 of a PPT
 /// character-property mask. Like the decorations above it moves no line break, because the
@@ -652,7 +656,8 @@ public readonly record struct SlideTextRun(
     bool IsShadowed = false,
     SlideEscapement Escapement = default,
     SlideSymbolFont? SymbolFont = null,
-    bool IsField = false)
+    bool IsField = false,
+    Colour? UnderlineColour = null)
 {
     /// <summary>One past the run's last character.</summary>
     public int End => Start + Length;

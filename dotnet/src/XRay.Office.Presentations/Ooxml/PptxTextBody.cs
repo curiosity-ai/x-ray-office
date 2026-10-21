@@ -998,7 +998,82 @@ internal static class PptxTextBody
             SymbolFont: symbolFont,
             // A hyperlink run is an EditEngine field, which changes how it breaks and how the
             // lines it spills onto are stacked — see SlideTextRun.IsField and SlideTextLayout.
-            IsField: field);
+            IsField: field,
+            UnderlineColour: UnderlineColour(runProperties, defaults));
+    }
+
+    /// <summary>
+    /// The colour <c>a:uFill</c> gives a run's underline, or null for the text's own colour.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>TextCharacterPropertiesContext</c> reads <c>a:uFill</c> through a
+    /// <c>SimpleFillPropertiesContext</c> into a <c>model::ComplexColor</c>
+    /// (<c>oox/source/drawingml/textcharacterpropertiescontext.cxx:156-157</c> at tag 26.8.1.1),
+    /// whose destructor converts the fill's best solid colour with
+    /// <c>Color::createComplexColor</c> (<c>misccontexts.cxx:597-600</c>), and
+    /// <c>TextCharacterProperties::pushToPropMap</c> then sets <c>CharUnderlineColor</c> from
+    /// <c>getRGBColor()</c> unless <c>a:uFillTx</c> is in force
+    /// (<c>textcharacterproperties.cxx:214-225</c>). Three consequences, each measured on
+    /// 26.8.1.1 and 26.2.4.2 alike with one underlined red run per case:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><description>An <c>a:srgbClr</c> or <c>a:prstClr</c> draws its own colour —
+    ///   <c>00B050</c> and <c>0000FF</c> — and <strong>its transforms are dropped</strong>:
+    ///   <c>getRGBColor</c> returns the stored components, so <c>00B050</c> under
+    ///   <c>lumMod 50%</c> is still drawn <c>00B050</c>.</description></item>
+    ///   <item><description>An <c>a:schemeClr</c> draws <strong>black</strong>. A theme
+    ///   <c>ComplexColor</c> carries no components, so <c>getRGBColor</c> answers
+    ///   <c>000000</c> — the regression of <c>a07bad0</c> (2025-11), present in both references.
+    ///   PowerPoint draws the theme colour. <strong>This follows the reference</strong>, as the
+    ///   presentations track does wherever 26.x and the author disagree and there is no
+    ///   word-parity switch for it (the of-pie composite colour is the precedent); the black is
+    ///   the reference's bug, and the line to change when the benchmark fixes it is
+    ///   here.</description></item>
+    ///   <item><description>Any other colour model — <c>a:sysClr</c>, <c>a:hslClr</c>,
+    ///   <c>a:scrgbClr</c> — reaches <c>createComplexColor</c>'s "TODO - Add other options" and
+    ///   comes back unused, so the next source in the chain decides, and failing that the text's
+    ///   colour.</description></item>
+    /// </list>
+    /// <para>
+    /// The run's own properties win over the inherited ones, as <c>assignIfUsed</c> does, and an
+    /// <c>a:uFillTx</c> anywhere in the chain turns the colour off, as the merged
+    /// <c>moUnderlineFillFollowText</c> does. Only a solid fill is read: the corpus states no
+    /// other, and a gradient's best solid colour is a stop the probe did not measure.
+    /// </para>
+    /// <para>
+    /// Not modelled, and worth knowing: <c>a:uLn</c> is not handled by that context at all
+    /// (<c>:149-150</c> is commented out) and its <c>return this</c> lets the line's own
+    /// <c>a:solidFill</c> reach the <em>run's</em> fill, so 26.8.1.1 draws a run stating
+    /// <c>a:uLn</c> with a blue fill in blue text as well as with a blue underline.
+    /// </para>
+    /// </remarks>
+    private static Colour? UnderlineColour(XElement? runProperties, XElement?[] defaults)
+    {
+        if (Drawing.Child(runProperties, "uFillTx") is not null) return null;
+        foreach (XElement? source in defaults)
+        {
+            if (source is not null && Drawing.Child(source, "uFillTx") is not null) return null;
+        }
+
+        return First(runProperties, defaults, element =>
+        {
+            XElement? solid = Drawing.Child(Drawing.Child(element, "uFill"), "solidFill");
+            if (solid is null) return null;
+
+            if (Drawing.Child(solid, "srgbClr") is { } rgb
+                && uint.TryParse(
+                    Drawing.Attribute(rgb, "val"), NumberStyles.HexNumber,
+                    CultureInfo.InvariantCulture, out uint value))
+            {
+                return Colour.FromRgb(value & 0xFFFFFF);
+            }
+
+            if (Drawing.Child(solid, "prstClr") is { } preset)
+                return PresetColours.Lookup(Drawing.Attribute(preset, "val"));
+
+            return Drawing.Child(solid, "schemeClr") is not null ? Colour.Black : (Colour?)null;
+        });
     }
 
     /// <summary>

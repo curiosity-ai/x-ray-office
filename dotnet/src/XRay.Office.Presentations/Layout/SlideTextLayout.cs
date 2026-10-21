@@ -1075,7 +1075,8 @@ public static partial class SlideTextLayout
             runs.Add(new FormattedRun(run.Start, run.Length, face, escaped, Tracking: run.Tracking));
             styles.Add(new RunStyle(
                 run.Colour, reference, face, run.IsUnderlined, run.IsStruckThrough,
-                run.Escapement.RiseOf(size), size, run.IsShadowed, run.Escapement));
+                run.Escapement.RiseOf(size), size, run.IsShadowed, run.Escapement,
+                run.IsUnderlined ? run.UnderlineColour : null));
         }
 
         if (first is null) return null;
@@ -2363,7 +2364,8 @@ public static partial class SlideTextLayout
             placed.Add(new PlacedGlyphRun(
                 glyphs,
                 colour,
-                Rules(block.DecorationAt(run.Start), run.Face, run.EmSize, pen, pitch, advance)));
+                Rules(block.DecorationAt(run.Start), run.Face, run.EmSize, pen, pitch, advance),
+                block.UnderlineColourAt(run.Start)));
 
             // The pen carries across the runs of a line, so the second run starts where the first
             // ended rather than back at the margin.
@@ -2638,6 +2640,9 @@ public static partial class SlideTextLayout
     /// decorations rather than with the measured run, because the shadow is drawn from the same
     /// glyphs at an offset and so moves no line break.
     /// </param>
+    /// <param name="UnderlineColour">
+    /// The underline's own colour, set only on an underlined run that states one.
+    /// </param>
     /// <param name="Escapement">
     /// The whole escapement, offset and proportion together, because the height a line takes needs
     /// both and neither <see cref="Rise"/> nor <see cref="NominalSize"/> carries the pair. See
@@ -2652,7 +2657,8 @@ public static partial class SlideTextLayout
         Length Rise = default,
         Length NominalSize = default,
         bool IsShadowed = false,
-        SlideEscapement Escapement = default);
+        SlideEscapement Escapement = default,
+        Colour? UnderlineColour = null);
 
     /// <summary>One paragraph, measured and broken.</summary>
     private sealed record Block(
@@ -2694,6 +2700,9 @@ public static partial class SlideTextLayout
 
         /// <summary>Whether the character casts the per-character drop shadow.</summary>
         public bool ShadowedAt(int index) => StyleAt(index).IsShadowed;
+
+        /// <summary>The colour of the underline under a character, null for the text's own.</summary>
+        public Colour? UnderlineColourAt(int index) => StyleAt(index).UnderlineColour;
 
         /// <summary>
         /// How far above the line's baseline a character is drawn, zero for ordinary text.

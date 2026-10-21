@@ -351,5 +351,13 @@ public sealed record PlacedText(
 /// them. They are filled rectangles rather than strokes so their thickness is exact, which is
 /// what the spreadsheet layer does with the same metrics.
 /// </remarks>
+/// <param name="UnderlineColour">
+/// The colour of the underline, when the run states one of its own, or null for
+/// <paramref name="Colour"/>. When it is set the run is underlined and the underline is the
+/// first of <paramref name="Rules"/>.
+/// </param>
 public readonly record struct PlacedGlyphRun(
-    GlyphRun Run, Colour Colour, IReadOnlyList<DocRect>? Rules = null);
+    GlyphRun Run,
+    Colour Colour,
+    IReadOnlyList<DocRect>? Rules = null,
+    Colour? UnderlineColour = null);

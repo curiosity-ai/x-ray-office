@@ -510,8 +510,13 @@ public static class SlideDrawing
 
         if (run.Rules is not { Count: > 0 } rules) return;
 
-        foreach (DocRect rule in rules)
+        for (int i = 0; i < rules.Count; i++)
         {
+            DocRect rule = rules[i];
+
+            // The underline is the first rule whenever a colour of its own travels with it.
+            Colour colour = i == 0 && run.UnderlineColour is { } underline ? underline : run.Colour;
+
             sink.FillPath(
                 new GraphicsPath()
                     .MoveTo(new DocPoint(rule.X, rule.Y))
@@ -519,7 +524,7 @@ public static class SlideDrawing
                     .LineTo(new DocPoint(rule.X + rule.Width, rule.Y + rule.Height))
                     .LineTo(new DocPoint(rule.X, rule.Y + rule.Height))
                     .Close(),
-                Paint.Solid(run.Colour));
+                Paint.Solid(colour));
         }
     }
 
