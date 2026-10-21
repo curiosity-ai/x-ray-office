@@ -97,6 +97,45 @@ public sealed class OfficeMathBoxTests
         ["sz8"] = ("""<m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/><w:sz w:val="16"/></w:rPr><m:t>x</m:t></m:r></m:oMath>""", 13.351),
     };
 
+    /// <summary>
+    /// Five n-ary arms and 26.8.1.1's own <c>svg:height</c> for each, which are not in the ladder above.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This tree draws every one of them 3.46 pt taller than the reference — the same constant whether
+    /// or not there are limits and whatever the body is — because the operator's rectangle is not a
+    /// row of text: <c>SmRect</c>'s constructor clips a StarMath-font symbol to its glyph's own bounds
+    /// (<c>bAllowSmaller</c>, <c>starmath/source/rect.cxx</c>:242-248), and the box approximates it by
+    /// a text height at the operator's size. That is a calibration of its own and is left.
+    /// </para>
+    /// <para>
+    /// What the arms do pin is where the limits go, and that is independent of the constant: the
+    /// reference gives <c>∑_{n=1}^{∞} x</c> and <c>∑_{n=1}^{∞} a/b</c> the <em>same</em> height, 32.544 pt,
+    /// because the limits hang off the operator and the operator is centred on whichever body it has.
+    /// Hanging them off the body made the second 8 pt taller here.
+    /// </para>
+    /// </remarks>
+    private static readonly Dictionary<string, (string Omml, double Points)> NaryArms = new()
+    {
+        ["nary-x"] = ("""<m:oMath><m:nary><m:naryPr><m:chr m:val="∑"/></m:naryPr><m:sub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>n=1</m:t></m:r></m:sub><m:sup><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>∞</m:t></m:r></m:sup><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>x</m:t></m:r></m:e></m:nary></m:oMath>""", 32.544),
+        ["nary-nolimits"] = ("""<m:oMath><m:nary><m:naryPr><m:chr m:val="∑"/><m:subHide m:val="1"/><m:supHide m:val="1"/></m:naryPr><m:sub></m:sub><m:sup></m:sup><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>x</m:t></m:r></m:e></m:nary></m:oMath>""", 16.553),
+        ["nary-frac"] = ("""<m:oMath><m:nary><m:naryPr><m:chr m:val="∑"/></m:naryPr><m:sub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>n=1</m:t></m:r></m:sub><m:sup><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>∞</m:t></m:r></m:sup><m:e><m:f><m:num><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>a</m:t></m:r></m:num><m:den><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>b</m:t></m:r></m:den></m:f></m:e></m:nary></m:oMath>""", 32.544),
+        ["nary-delim-frac"] = ("""<m:oMath><m:nary><m:naryPr><m:chr m:val="∑"/></m:naryPr><m:sub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>n=1</m:t></m:r></m:sub><m:sup><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>∞</m:t></m:r></m:sup><m:e><m:d><m:dPr></m:dPr><m:e><m:f><m:num><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>a</m:t></m:r></m:num><m:den><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>b</m:t></m:r></m:den></m:f></m:e></m:d></m:e></m:nary></m:oMath>""", 32.602),
+        ["nary-sub-only-frac"] = ("""<m:oMath><m:nary><m:naryPr><m:chr m:val="∑"/><m:supHide m:val="1"/></m:naryPr><m:sub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>n=1</m:t></m:r></m:sub><m:sup></m:sup><m:e><m:d><m:dPr></m:dPr><m:e><m:f><m:num><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>a</m:t></m:r></m:num><m:den><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>b</m:t></m:r></m:den></m:f></m:e></m:d></m:e></m:nary></m:oMath>""", 31.406),
+    };
+
+    /// <summary>A body taller than the operator does not push the limits out — the reference's own answer.</summary>
+    [Fact]
+    public void AnNaryLimitHangsOffTheOperatorNotTheBody()
+    {
+        double plain = Measure(NaryArms["nary-x"].Omml);
+
+        (NaryArms["nary-frac"].Points - NaryArms["nary-x"].Points).ShouldBe(0, 0.01);
+        Measure(NaryArms["nary-frac"].Omml).ShouldBe(plain, 0.01);
+        Measure(NaryArms["nary-delim-frac"].Omml).ShouldBe(
+            plain + NaryArms["nary-delim-frac"].Points - NaryArms["nary-x"].Points, 0.25);
+    }
+
     /// <summary>Every arm of the ladder lands on the reference's own answer.</summary>
     [Fact]
     public void EveryConstructMatchesTheReference()
