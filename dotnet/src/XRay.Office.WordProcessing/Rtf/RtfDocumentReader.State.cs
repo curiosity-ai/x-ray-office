@@ -236,6 +236,17 @@ public sealed partial class RtfDocumentReader
         public int ListLevel { get; set; }
         public bool InTable { get; set; }
         public int UnicodeSkip { get; set; } = 1;
+
+        /// <summary>
+        /// How many fallback characters of the last <c>\uN</c> are still to be dropped.
+        /// </summary>
+        /// <remarks>
+        /// Part of the group state, as <c>RTFParserState::m_nCharsToSkip</c> is in writerfilter
+        /// (<c>rtfdocumentimpl.hxx</c>:569): a group copies the count when it opens and the enclosing
+        /// group's own count comes back when it closes, so a fallback cut short by a brace resumes in
+        /// the outer group rather than ending.
+        /// </remarks>
+        public int CharsToSkip { get; set; }
         public string? HyperlinkTarget { get; set; }
         public string? InfoField { get; set; }
         public int? FontTableIndex { get; set; }
@@ -354,6 +365,7 @@ public sealed partial class RtfDocumentReader
             ListLevel = ListLevel,
             InTable = InTable,
             UnicodeSkip = UnicodeSkip,
+            CharsToSkip = CharsToSkip,
             HyperlinkTarget = HyperlinkTarget,
             FontSizeHalfPoints = FontSizeHalfPoints,
             LeftIndent = LeftIndent,

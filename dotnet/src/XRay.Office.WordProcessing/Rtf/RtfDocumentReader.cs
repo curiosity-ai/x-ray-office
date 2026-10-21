@@ -370,16 +370,23 @@ public sealed partial class RtfDocumentReader
                     AppendText(state, char.ConvertFromUtf32(token.CodePoint));
                     // \uN is followed by however many fallback characters \uc says, which
                     // duplicate the same character in the document's code page. Emitting them
-                    // would double every non-ASCII character.
-                    SkipUnicodeFallback(tokeniser, state.UnicodeSkip);
+                    // would double every non-ASCII character. They are dropped as they arrive, by
+                    // count, rather than by reading ahead here: see SkipFallback.
+                    state.CharsToSkip = state.UnicodeSkip;
                     break;
 
                 case RtfTokenKind.EscapedByte:
+                    if (state.CharsToSkip > 0)
+                    {
+                        state.CharsToSkip--;
+                        break;
+                    }
                     AppendText(state, DecodeByte((byte)token.CodePoint, state));
                     break;
 
                 case RtfTokenKind.Text:
-                    AppendText(state, Decode(token.Bytes.Span, state));
+                    ReadOnlySpan<byte> text = SkipFallback(token.Bytes.Span, state);
+                    if (!text.IsEmpty) AppendText(state, Decode(text, state));
                     break;
 
                 case RtfTokenKind.Binary:
@@ -1469,37 +1476,43 @@ public sealed partial class RtfDocumentReader
     }
 
     /// <summary>
-    /// Consumes the code-page fallback characters that follow a <c>\uN</c>.
+    /// Drops what is left of a <c>\uN</c>'s code-page fallback from the front of a text token.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// A writer emits both a Unicode code point and its best approximation in the document's code
-    /// page, so that older readers see something. <c>\ucN</c> says how many characters the
-    /// approximation takes. Not skipping them doubles every non-ASCII character — with the
-    /// duplicate usually rendered as a question mark, which is what makes the symptom look like
-    /// an encoding bug rather than a parsing one.
+    /// page, so that older readers see something; <c>\ucN</c> says how many characters the
+    /// approximation takes. Not skipping them doubles every non-ASCII character.
+    /// </para>
+    /// <para>
+    /// The count is of characters, not of tokens. Pandoc writes a typographic apostrophe as
+    /// <c>\u8217'</c> followed directly by the rest of the word, so the fallback <c>'</c> and
+    /// <c>s swim!</c> arrive as one text token; skipping the whole token lost the rest of every
+    /// such run ("Let’" for "Let’s swim!"). This follows writerfilter's
+    /// <c>RTFDocumentImpl::resolveChars</c> (<c>sw/source/writerfilter/rtftok/rtfdocumentimpl.cxx</c>:1342-1395):
+    /// each literal byte and each <c>\'hh</c> escape counts one (a Shift-JIS lead byte takes its trail
+    /// byte with it), a newline counts nothing, and a control word neither counts nor ends the
+    /// skip — the count lives on in the group state until characters use it up, and a <c>\uN</c>
+    /// sets it afresh (<c>rtfdispatchvalue.cxx</c>:1113). Measured against 26.8.1.1 on a probe of eleven
+    /// shapes (<c>\uc0</c>..<c>\uc3</c>, a brace, <c>\b</c>, <c>\par</c> and a hex escape inside the
+    /// fallback); every one agrees.
+    /// </para>
     /// </remarks>
-    private static void SkipUnicodeFallback(RtfTokeniser tokeniser, int count)
+    private ReadOnlySpan<byte> SkipFallback(ReadOnlySpan<byte> bytes, GroupState state)
     {
-        for (int skipped = 0; skipped < count;)
+        if (state.CharsToSkip <= 0) return bytes;
+
+        bool shiftJis = EncodingFor(state).CodePage == 932;
+        int index = 0;
+        while (index < bytes.Length && state.CharsToSkip > 0)
         {
-            RtfToken token = tokeniser.Read();
-            switch (token.Kind)
-            {
-                case RtfTokenKind.End:
-                    return;
-                case RtfTokenKind.EscapedByte:
-                    skipped++;
-                    break;
-                case RtfTokenKind.Text:
-                    // A text token may cover several fallback characters at once.
-                    skipped += token.Bytes.Length;
-                    break;
-                default:
-                    // A group boundary or control word ends the fallback run: the approximation
-                    // is plain characters only.
-                    return;
-            }
+            byte current = bytes[index++];
+            if (shiftJis && (current is >= 0x80 and <= 0x9F || current >= 0xE0) && index < bytes.Length)
+                index++;
+            state.CharsToSkip--;
         }
+
+        return bytes[index..];
     }
 
     private void ReportDepthLimit()
