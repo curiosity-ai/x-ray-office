@@ -8,7 +8,7 @@ from LibreOffice's Writer, Calc and Impress import and layout code: no office in
 LibreOffice process, no COM interop.
 
 X-Ray.Office is part of the [X-Ray](https://github.com/curiosity-ai/x-ray) family of .NET
-libraries from Curiosity GmbH. Documentation: <https://xray.curiosity.ai/>.
+libraries from Curiosity GmbH. Documentation: <https://docs.curiosity.ai/x-ray/>.
 
 ## Install
 

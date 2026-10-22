@@ -22,6 +22,19 @@ not packable. `.devops/build-x-ray-office-nuget.yml` publishes all thirteen in o
 version on a change to `dotnet/` on `master`; a library added under `src/` must be added to its
 lists, and to the facade's references.
 
+## Documentation lives in curiosity-ai/documentation
+
+The docs for X-Ray.Office are not in this repository. They are the `x-ray/office/` folder of
+[curiosity-ai/documentation](https://github.com/curiosity-ai/documentation) (clone: `/home/user/documentation`
+in agent sessions), published at <https://docs.curiosity.ai/x-ray/office/>.
+
+**A change to the public API, options, defaults, behavior, limits, licence, install steps or
+supported formats is not finished until that page is updated.** Open the documentation PR against
+`curiosity-ai/documentation` (never against this repository, an upstream, or a LibreOffice
+repository), link it from the code PR, and say in the code PR when no page needs to change. The
+`docs-site` skill in curiosity-ai/x-ray has the conventions: links carry the `/x-ray` prefix and
+samples use the real API.
+
 ## Scope
 
 **In scope.** Word processing (`docx docm dotx dotm doc dot rtf odt ott fodt`),
